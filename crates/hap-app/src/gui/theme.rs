@@ -1,4 +1,4 @@
-//! Professional dark studio theme, palette, and layout helpers for HAP Studio.
+//! Professional dark studio theme, palette, and layout helpers for HapLab.
 
 use eframe::egui::{self, Color32, CornerRadius, Painter, Rect, Stroke, Vec2};
 use std::path::Path;

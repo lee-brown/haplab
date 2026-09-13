@@ -1,4 +1,4 @@
-//! # HAP Video Studio
+//! # HapLab
 //!
 //! A pure Rust desktop GUI and CLI tool for encoding, decoding, and inspecting HAP video streams.
 //! Built by Lee Brown. Licensed under the MIT License.
@@ -9,7 +9,7 @@ mod worker;
 
 use clap::Parser;
 use eframe::egui;
-use gui::HapStudioApp;
+use gui::HapLabApp;
 use std::env;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -39,15 +39,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1040.0, 780.0])
             .with_min_inner_size([720.0, 520.0])
-            .with_title("HAP Video Studio")
+            .with_title("HapLab")
             .with_drag_and_drop(true),
         ..Default::default()
     };
 
     eframe::run_native(
-        "HAP Video Studio",
+        "HapLab",
         native_options,
-        Box::new(|_cc| Ok(Box::new(HapStudioApp::default()))),
+        Box::new(|_cc| Ok(Box::new(HapLabApp::default()))),
     )
     .map_err(|e| format!("GUI launch failed: {}", e))?;
 

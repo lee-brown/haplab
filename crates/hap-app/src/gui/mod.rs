@@ -3,4 +3,4 @@
 pub mod app;
 pub mod theme;
 
-pub use app::HapStudioApp;
+pub use app::HapLabApp;

@@ -1,4 +1,4 @@
-//! Main eframe / egui application interface for HAP Studio.
+//! Main eframe / egui application interface for HapLab.
 
 use super::theme::{
     apply_studio_theme, colors, format_bytes, format_smpte_timecode,
@@ -76,7 +76,7 @@ impl EncoderPreset {
     }
 }
 
-pub struct HapStudioApp {
+pub struct HapLabApp {
     active_tab: ActiveTab,
     toast: Option<(String, Instant, Color32)>,
 
@@ -129,7 +129,7 @@ pub struct HapStudioApp {
     log_search: String,
 }
 
-impl Default for HapStudioApp {
+impl Default for HapLabApp {
     fn default() -> Self {
         let instance = wgpu::Instance::default();
         let adapter_res: Result<wgpu::Adapter, _> = pollster::block_on(instance.request_adapter(
@@ -200,7 +200,7 @@ impl Default for HapStudioApp {
             log_search: String::new(),
         };
 
-        app.log("HAP Studio initialized.");
+        app.log("HapLab initialized.");
         app.log(&format!(
             "Graphics Device: {} [{}]",
             app.gpu_adapter_name, app.gpu_backend_name
@@ -218,7 +218,7 @@ impl Default for HapStudioApp {
     }
 }
 
-impl HapStudioApp {
+impl HapLabApp {
     fn log(&mut self, msg: &str) {
         let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();
         self.system_logs.push(format!("[{}] {}", timestamp, msg));
@@ -477,7 +477,7 @@ impl HapStudioApp {
     }
 }
 
-impl eframe::App for HapStudioApp {
+impl eframe::App for HapLabApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         apply_studio_theme(ctx);
 
@@ -632,7 +632,7 @@ impl eframe::App for HapStudioApp {
                 ui.add_space(2.0);
                 ui.horizontal(|ui| {
                     ui.heading(
-                        RichText::new("HAP Studio")
+                        RichText::new("HapLab")
                             .size(20.0)
                             .color(Color32::WHITE)
                             .strong(),
@@ -744,7 +744,7 @@ impl eframe::App for HapStudioApp {
 // ---------------------------------------------------------------------------
 // TAB 1: PLAYER & INSPECTOR
 // ---------------------------------------------------------------------------
-impl HapStudioApp {
+impl HapLabApp {
     fn show_player_tab(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
 
@@ -1121,7 +1121,7 @@ impl HapStudioApp {
 // ---------------------------------------------------------------------------
 // TAB 2: ENCODER
 // ---------------------------------------------------------------------------
-impl HapStudioApp {
+impl HapLabApp {
     fn show_encoder_tab(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
 
@@ -1530,7 +1530,7 @@ impl HapStudioApp {
 // ---------------------------------------------------------------------------
 // TAB 3: DIAGNOSTICS & SYSTEM
 // ---------------------------------------------------------------------------
-impl HapStudioApp {
+impl HapLabApp {
     fn show_diagnostics_tab(&mut self, ui: &mut egui::Ui) {
         ui.heading(RichText::new("System & Diagnostics").size(19.0));
         ui.label(RichText::new("GPU capabilities, threading, and runtime event log.").color(colors::TEXT_MUTED));
