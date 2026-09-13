@@ -244,6 +244,86 @@ fn collect_image_files(input_path: &Path) -> Result<Vec<PathBuf>, Box<dyn std::e
 }
 
 fn run_encode(args: EncodeArgs) -> Result<(), Box<dyn std::error::Error>> {
+    if args.input.is_file() && crate::worker::is_video_container(&args.input) {
+        let probe = crate::worker::probe_video_input(&args.input)?;
+        println!(
+            "Input video detected [{}]: {}x{} @ {:.2} fps, ~{} frames ({:.2}s)",
+            probe.codec, probe.width, probe.height, probe.fps, probe.frame_count, probe.duration_secs
+        );
+        let width = probe.width;
+        let height = probe.height;
+        if width % 4 != 0 || height % 4 != 0 {
+            return Err(format!("Video dimensions ({}x{}) must be multiples of 4 for HAP encoding", width, height).into());
+        }
+
+        let fps = if args.fps > 0.0 { args.fps } else { probe.fps };
+        let hap_format: HapFormat = args.format.into();
+        let video_cfg = VideoConfig::new(width as u32, height as u32, fps, hap_format);
+        let mut writer = QtHapWriter::create(&args.output, video_cfg)?;
+
+        #[cfg(windows)]
+        use std::os::windows::process::CommandExt;
+        #[cfg(windows)]
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        let mut cmd = std::process::Command::new("ffmpeg");
+        cmd.args(&["-v", "error", "-i"])
+            .arg(&args.input)
+            .args(&["-f", "rawvideo", "-pix_fmt", "rgba", "-"]);
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        let mut child = cmd.stdout(std::process::Stdio::piped()).spawn()
+            .map_err(|e| format!("Failed to spawn ffmpeg: {}", e))?;
+        let mut stdout = child.stdout.take().ok_or("Failed to capture ffmpeg stdout pipe")?;
+
+        let frame_bytes = width * height * 4;
+        let mut raw = vec![0u8; frame_bytes];
+        let mut current_frame = 0usize;
+        let start_time = Instant::now();
+
+        use std::io::Read;
+        let encode_opts = EncodeOptions {
+            format: hap_format,
+            chunk_count: args.chunks,
+            use_snappy: args.snappy,
+            color_range: args.color_range.into(),
+            alpha_mode: args.alpha_mode.into(),
+            dither_mode: args.dither.into(),
+            quality: args.quality.into(),
+        };
+
+        loop {
+            match stdout.read_exact(&mut raw) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) => {
+                    let _ = child.kill();
+                    return Err(format!("Pipe read error: {}", e).into());
+                }
+            }
+
+            let packet = hap_core::encode_frame_with_options(&raw, width, height, &encode_opts)?;
+            writer.write_frame(&packet)?;
+            current_frame += 1;
+            if current_frame % 30 == 0 || current_frame == probe.frame_count {
+                let elapsed = start_time.elapsed().as_secs_f32().max(0.001);
+                let fps_rate = current_frame as f32 / elapsed;
+                print!("\rEncoded frame {}/{} ({:.1} FPS)...", current_frame, probe.frame_count, fps_rate);
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+            }
+        }
+        let _ = child.wait();
+        writer.finalize()?;
+        let total_secs = start_time.elapsed().as_secs_f32();
+        println!(
+            "\nSuccessfully encoded {} frames to {:?} ({:.2}s, {:.1} FPS avg)",
+            current_frame, args.output, total_secs, current_frame as f32 / total_secs.max(0.001)
+        );
+        return Ok(());
+    }
+
     let image_files = collect_image_files(&args.input)?;
     let total_frames = image_files.len();
     println!("Found {} frames to encode.", total_frames);
