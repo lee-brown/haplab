@@ -1,4 +1,4 @@
-//! Main eframe / egui application interface with a modern, high-polish dark studio UX.
+//! Main eframe / egui application interface for HAP Studio.
 
 use super::theme::{
     apply_studio_theme, colors, format_bytes, format_smpte_timecode,
@@ -53,23 +53,23 @@ pub enum EncoderPreset {
 impl EncoderPreset {
     pub fn name(&self) -> &'static str {
         match self {
-            Self::HapQRecommended => "🌟 Hap Q (Production)",
-            Self::HapRUltra => "💎 Hap R (BC7 Ultra)",
-            Self::HapQAlphaTransparent => "🎭 Hap Q Alpha (Broadcast)",
-            Self::Hap1Fast => "⚡ Hap 1 (Fastest)",
-            Self::HapAlphaLight => "🪶 Hap Alpha (DXT5)",
-            Self::Custom => "⚙️ Custom Settings",
+            Self::HapQRecommended => "Hap Q",
+            Self::HapRUltra => "Hap R",
+            Self::HapQAlphaTransparent => "Hap Q Alpha",
+            Self::Hap1Fast => "Hap 1",
+            Self::HapAlphaLight => "Hap Alpha",
+            Self::Custom => "Custom",
         }
     }
 
     pub fn description(&self) -> &'static str {
         match self {
-            Self::HapQRecommended => "Scaled YCoCg-DXT5 with Snappy. The industry standard for high-fidelity stage & projection.",
-            Self::HapRUltra => "State-of-the-art BC7 UNORM. Superior quality for UI, graphics, and crisp alpha transparency.",
-            Self::HapQAlphaTransparent => "Dual-stream YCoCg color + uncompressed BC4 alpha matte. Perfect for transparent broadcast graphics.",
-            Self::Hap1Fast => "Standard DXT1 RGB. Lowest CPU decode overhead for extreme multi-screen playback.",
-            Self::HapAlphaLight => "Standard DXT5 RGBA. Compact single-texture transparent video.",
-            Self::Custom => "Manually customize codec flavour, threading chunk partitions, and Snappy compression.",
+            Self::HapQRecommended => "Scaled YCoCg-DXT5 with Snappy compression. High color fidelity for video playback.",
+            Self::HapRUltra => "BC7 UNORM texture compression. Sharp detail and integrated alpha channel.",
+            Self::HapQAlphaTransparent => "Dual-stream YCoCg color + BC4 alpha matte for transparent video.",
+            Self::Hap1Fast => "DXT1 RGB. Lowest CPU decode overhead.",
+            Self::HapAlphaLight => "DXT5 RGBA. Single-stream transparent video.",
+            Self::Custom => "Manual configuration of codec format, chunk count, and compression.",
         }
     }
 }
@@ -190,17 +190,17 @@ impl Default for HapStudioApp {
             log_search: String::new(),
         };
 
-        app.log("HAP Video Studio initialized.");
+        app.log("HAP Studio initialized.");
         app.log(&format!(
-            "Hardware GPU: {} [{}]",
+            "Graphics Device: {} [{}]",
             app.gpu_adapter_name, app.gpu_backend_name
         ));
         app.log(&format!(
-            "Direct BC Texture Uploads: {}",
+            "Hardware BC Texture Uploads: {}",
             if app.gpu_supports_bc {
-                "Supported (wgpu)"
+                "Supported"
             } else {
-                "Pure Rust Fallback"
+                "Software Fallback"
             }
         ));
 
@@ -297,7 +297,7 @@ impl HapStudioApp {
                     .map(|f| f.to_string_lossy().to_string())
                     .unwrap_or_default();
                 self.log(&format!(
-                    "Opened MOV: {} ({}x{}, {:.2} fps, {} frames, {})",
+                    "Opened file: {} ({}x{}, {:.2} fps, {} frames, {})",
                     filename,
                     reader.width(),
                     reader.height(),
@@ -477,7 +477,7 @@ impl eframe::App for HapStudioApp {
             }
         });
 
-        // 2. Keyboard Shortcuts (Global & Player)
+        // 2. Keyboard Shortcuts (Player)
         if self.active_tab == ActiveTab::PlayerInspector && self.reader.is_some() {
             ctx.input(|i| {
                 let frame_count = self.reader.as_ref().map(|r| r.frame_count()).unwrap_or(0);
@@ -507,7 +507,7 @@ impl eframe::App for HapStudioApp {
                     if i.key_pressed(egui::Key::L) {
                         self.loop_playback = !self.loop_playback;
                         self.notify(
-                            format!("Loop: {}", if self.loop_playback { "Enabled" } else { "Disabled" }),
+                            format!("Loop: {}", if self.loop_playback { "On" } else { "Off" }),
                             colors::ACCENT_CYAN,
                         );
                     }
@@ -599,18 +599,18 @@ impl eframe::App for HapStudioApp {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.heading(
-                    RichText::new("⚡ HAP Video Studio")
-                        .size(20.0)
-                        .color(colors::ACCENT_CYAN)
+                    RichText::new("HAP Studio")
+                        .size(18.0)
+                        .color(Color32::WHITE)
                         .strong(),
                 );
-                ui.label(RichText::new("v0.1.0 • Pure Rust • Zero FFmpeg").color(colors::TEXT_FAINT));
+                ui.label(RichText::new("v0.1.0").color(colors::TEXT_FAINT));
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if self.gpu_supports_bc {
-                        render_badge(ui, "⚡ GPU BC ACCELERATED", Color32::from_rgb(16, 50, 35), colors::ACCENT_GREEN);
+                        render_badge(ui, "GPU Acceleration Active", Color32::from_rgb(16, 40, 30), colors::ACCENT_GREEN);
                     } else {
-                        render_badge(ui, "🖥 CPU FALLBACK", Color32::from_rgb(50, 45, 20), colors::ACCENT_AMBER);
+                        render_badge(ui, "CPU Mode", Color32::from_rgb(38, 35, 25), colors::TEXT_MUTED);
                     }
                 });
             });
@@ -638,28 +638,28 @@ impl eframe::App for HapStudioApp {
                 };
 
                 let mov_loaded = self.reader.is_some();
-                if tab_btn(ui, self.active_tab == ActiveTab::PlayerInspector, "🎬 Player & Inspector", if mov_loaded { Some(1) } else { None }) {
+                if tab_btn(ui, self.active_tab == ActiveTab::PlayerInspector, "Player & Inspector", if mov_loaded { Some(1) } else { None }) {
                     self.active_tab = ActiveTab::PlayerInspector;
                 }
 
                 let frames_detected = self.enc_detected_frames;
-                if tab_btn(ui, self.active_tab == ActiveTab::Encoder, "🚀 Video Encoder", if frames_detected > 0 { Some(frames_detected) } else { None }) {
+                if tab_btn(ui, self.active_tab == ActiveTab::Encoder, "Encoder", if frames_detected > 0 { Some(frames_detected) } else { None }) {
                     self.active_tab = ActiveTab::Encoder;
                 }
 
-                if tab_btn(ui, self.active_tab == ActiveTab::Diagnostics, "🛠 Diagnostics & Logs", None) {
+                if tab_btn(ui, self.active_tab == ActiveTab::Diagnostics, "Diagnostics", None) {
                     self.active_tab = ActiveTab::Diagnostics;
                 }
             });
 
             ui.separator();
 
-            // Drag & Drop Hover Border Overlay
+            // Drag & Drop Hover Border
             if is_dragging {
                 ui.painter().rect_stroke(
                     ui.max_rect(),
                     CornerRadius::same(8),
-                    Stroke::new(2.5, colors::ACCENT_CYAN),
+                    Stroke::new(2.0, colors::ACCENT_CYAN),
                     egui::StrokeKind::Inside,
                 );
             }
@@ -677,25 +677,24 @@ impl eframe::App for HapStudioApp {
                     ui.add_space(24.0);
                 });
 
-            // --- FOOTER STATUS & TOAST ---
+            // --- FOOTER STATUS ---
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                 ui.separator();
                 ui.horizontal(|ui| {
                     if let Some((ref msg, time, color)) = self.toast {
                         if time.elapsed().as_secs_f32() < 4.0 {
-                            render_badge(ui, "●", Color32::TRANSPARENT, color);
                             ui.label(RichText::new(msg).color(color).strong());
                         } else {
                             self.toast = None;
                         }
                     } else if let Some(ref path) = self.mov_path {
-                        ui.label(RichText::new(format!("Active: {}", path.display())).color(colors::TEXT_MUTED));
+                        ui.label(RichText::new(format!("File: {}", path.display())).color(colors::TEXT_MUTED));
                     } else {
-                        ui.label(RichText::new("Drop a HAP .mov to play & inspect, or image files to encode.").color(colors::TEXT_FAINT));
+                        ui.label(RichText::new("Ready. Drop a MOV file to inspect, or an image folder to encode.").color(colors::TEXT_FAINT));
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(format!("GPU: {}", self.gpu_adapter_name)).color(colors::TEXT_FAINT).size(11.0));
+                        ui.label(RichText::new(format!("Device: {}", self.gpu_adapter_name)).color(colors::TEXT_FAINT).size(11.0));
                     });
                 });
             });
@@ -710,28 +709,26 @@ impl HapStudioApp {
     fn show_player_tab(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
 
-        // If no file loaded, display prominent Drop Zone Hero Card
+        // Drop Zone when no file is loaded
         if self.reader.is_none() {
-            ui.add_space(20.0);
+            ui.add_space(24.0);
             let frame = egui::Frame::canvas(ui.style())
                 .fill(colors::BG_CARD)
-                .stroke(Stroke::new(1.5, colors::BORDER_SUBTLE))
-                .corner_radius(CornerRadius::same(10))
-                .inner_margin(egui::Margin::same(30));
+                .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
+                .corner_radius(CornerRadius::same(8))
+                .inner_margin(egui::Margin::same(28));
 
             frame.show(ui, |ui| {
                 ui.vertical_centered(|ui| {
-                    ui.label(RichText::new("🎬").size(48.0));
-                    ui.add_space(10.0);
-                    ui.heading(RichText::new("Drag & Drop any HAP Video (.mov)").size(22.0).color(Color32::WHITE).strong());
-                    ui.add_space(6.0);
-                    ui.label(RichText::new("Instant hardware-accelerated playback and technical stream inspection.").color(colors::TEXT_MUTED));
-                    ui.label(RichText::new("Supports Hap 1, Hap Alpha, Hap Q, Hap Q Alpha, Hap R (BC7), and Hap HDR (BC6H).").color(colors::TEXT_FAINT).size(12.0));
-                    ui.add_space(16.0);
+                    ui.add_space(8.0);
+                    ui.heading(RichText::new("Drop a HAP QuickTime file (.mov) here").size(18.0).color(Color32::WHITE).strong());
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("Playback and inspect Hap 1, Hap Alpha, Hap Q, Hap Q Alpha, Hap R, and Hap HDR files.").color(colors::TEXT_MUTED));
+                    ui.add_space(14.0);
 
                     ui.horizontal(|ui| {
-                        ui.add_space(ui.available_width() * 0.5 - 130.0);
-                        if ui.button(RichText::new("📂 Open HAP File...").size(15.0).strong()).clicked() {
+                        ui.add_space(ui.available_width() * 0.5 - 110.0);
+                        if ui.button(RichText::new("Open File...").size(14.0)).clicked() {
                             if let Some(path) = rfd::FileDialog::new()
                                 .add_filter("QuickTime HAP Video", &["mov", "mp4"])
                                 .pick_file()
@@ -740,10 +737,11 @@ impl HapStudioApp {
                             }
                         }
 
-                        if ui.button(RichText::new("🚀 Switch to Encoder").size(15.0)).clicked() {
+                        if ui.button(RichText::new("Switch to Encoder").size(14.0)).clicked() {
                             self.active_tab = ActiveTab::Encoder;
                         }
                     });
+                    ui.add_space(4.0);
                 });
             });
             return;
@@ -756,7 +754,7 @@ impl HapStudioApp {
 
         // --- TOP TOOLBAR ---
         ui.horizontal(|ui| {
-            if ui.button("📂 Open Another...").clicked() {
+            if ui.button("Open File...").clicked() {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("QuickTime HAP Video", &["mov", "mp4"])
                     .pick_file()
@@ -766,12 +764,12 @@ impl HapStudioApp {
             }
 
             if let Some(ref path) = self.mov_path {
-                if ui.button("📂 Reveal in Explorer").clicked() {
+                if ui.button("Show in Explorer").clicked() {
                     reveal_in_file_manager(path);
                 }
             }
 
-            let export_text = if self.show_export_panel { "▲ Hide Exporter" } else { "📤 Export PNG Sequence..." };
+            let export_text = if self.show_export_panel { "Hide Exporter" } else { "Export Frames..." };
             if ui.selectable_label(self.show_export_panel, export_text).clicked() {
                 self.show_export_panel = !self.show_export_panel;
             }
@@ -781,9 +779,9 @@ impl HapStudioApp {
             // Channel Mode Selector
             ui.label(RichText::new("Channels:").color(colors::TEXT_MUTED));
             let old_mode = self.channel_mode;
-            ui.selectable_value(&mut self.channel_mode, ChannelViewMode::Rgba, "🎨 RGBA");
-            ui.selectable_value(&mut self.channel_mode, ChannelViewMode::AlphaMatte, "👁 Alpha Mask");
-            ui.selectable_value(&mut self.channel_mode, ChannelViewMode::RgbOpaque, "🌈 RGB Only");
+            ui.selectable_value(&mut self.channel_mode, ChannelViewMode::Rgba, "RGBA");
+            ui.selectable_value(&mut self.channel_mode, ChannelViewMode::AlphaMatte, "Alpha (Matte)");
+            ui.selectable_value(&mut self.channel_mode, ChannelViewMode::RgbOpaque, "RGB");
             if old_mode != self.channel_mode {
                 if let Some(ref mut raw) = self.raw_frame_cache {
                     let mut copy = raw.clone();
@@ -794,10 +792,10 @@ impl HapStudioApp {
             ui.separator();
 
             // Background Mode Selector
-            ui.label(RichText::new("BG:").color(colors::TEXT_MUTED));
-            ui.selectable_value(&mut self.bg_mode, BackgroundViewMode::Checkerboard, "🔲 Check");
-            ui.selectable_value(&mut self.bg_mode, BackgroundViewMode::Dark, "⬛ Dark");
-            ui.selectable_value(&mut self.bg_mode, BackgroundViewMode::Light, "⬜ Light");
+            ui.label(RichText::new("Background:").color(colors::TEXT_MUTED));
+            ui.selectable_value(&mut self.bg_mode, BackgroundViewMode::Checkerboard, "Checkerboard");
+            ui.selectable_value(&mut self.bg_mode, BackgroundViewMode::Dark, "Dark");
+            ui.selectable_value(&mut self.bg_mode, BackgroundViewMode::Light, "Light");
         });
 
         // --- EXPORT PANEL (Collapsible) ---
@@ -821,7 +819,7 @@ impl HapStudioApp {
                             ui.selectable_value(&mut self.export_format, "tiff".into(), "TIFF (.tiff)");
                         });
 
-                    if ui.button(RichText::new("📁 Choose Output Folder & Start Export").strong()).clicked() {
+                    if ui.button(RichText::new("Choose Destination Folder & Export").strong()).clicked() {
                         if let Some(folder) = rfd::FileDialog::new().pick_folder() {
                             if let Some(ref path) = self.mov_path {
                                 let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -838,7 +836,7 @@ impl HapStudioApp {
                     ui.add_space(6.0);
                     match status {
                         WorkerProgress::Started { total } => {
-                            ui.label(format!("Starting export of {} frames...", total));
+                            ui.label(format!("Exporting {} frames...", total));
                         }
                         WorkerProgress::Progress { current, total, fps, percent } => {
                             ui.horizontal(|ui| {
@@ -924,7 +922,7 @@ impl HapStudioApp {
 
             ui.horizontal(|ui| {
                 let timecode = format_smpte_timecode(self.current_frame, fps);
-                ui.label(RichText::new(timecode).monospace().size(16.0).color(colors::ACCENT_CYAN).strong());
+                ui.label(RichText::new(timecode).monospace().size(15.0).color(colors::ACCENT_CYAN).strong());
 
                 let slider = egui::Slider::new(&mut self.current_frame, 0..=max_frame)
                     .show_value(false)
@@ -943,58 +941,58 @@ impl HapStudioApp {
 
             // Transport Buttons
             ui.horizontal(|ui| {
-                if ui.button(RichText::new("⏮").size(14.0)).on_hover_text("Jump to First Frame (Home)").clicked() {
+                if ui.button("|<").on_hover_text("Jump to Start (Home)").clicked() {
                     self.current_frame = 0;
                     self.update_preview_frame(&ctx);
                 }
 
-                if ui.button(RichText::new("⏪").size(14.0)).on_hover_text("Step -10 Frames (Shift+Left)").clicked() {
+                if ui.button("-10").on_hover_text("Step -10 Frames (Shift+Left)").clicked() {
                     self.current_frame = self.current_frame.saturating_sub(10);
                     self.update_preview_frame(&ctx);
                 }
 
-                if ui.button(RichText::new("◀").size(14.0)).on_hover_text("Step -1 Frame (Left)").clicked() {
+                if ui.button("<").on_hover_text("Step -1 Frame (Left)").clicked() {
                     self.current_frame = self.current_frame.saturating_sub(1);
                     self.update_preview_frame(&ctx);
                 }
 
                 // Center Play/Pause button
-                let play_text = if self.is_playing { "⏸ Pause" } else { "▶ Play" };
-                let play_btn = egui::Button::new(RichText::new(play_text).strong().size(15.0))
+                let play_text = if self.is_playing { "Pause" } else { "Play" };
+                let play_btn = egui::Button::new(RichText::new(play_text).strong().size(14.0))
                     .fill(if self.is_playing { colors::ACCENT_AMBER } else { colors::ACCENT_BLUE })
                     .corner_radius(CornerRadius::same(6));
 
-                if ui.add_sized([90.0, 24.0], play_btn).clicked() {
+                if ui.add_sized([75.0, 24.0], play_btn).clicked() {
                     self.is_playing = !self.is_playing;
                     self.last_frame_time = Instant::now();
                 }
 
-                if ui.button(RichText::new("▶").size(14.0)).on_hover_text("Step +1 Frame (Right)").clicked() {
+                if ui.button(">").on_hover_text("Step +1 Frame (Right)").clicked() {
                     if self.current_frame + 1 < count {
                         self.current_frame += 1;
                         self.update_preview_frame(&ctx);
                     }
                 }
 
-                if ui.button(RichText::new("⏩").size(14.0)).on_hover_text("Step +10 Frames (Shift+Right)").clicked() {
+                if ui.button("+10").on_hover_text("Step +10 Frames (Shift+Right)").clicked() {
                     self.current_frame = (self.current_frame + 10).min(count.saturating_sub(1));
                     self.update_preview_frame(&ctx);
                 }
 
-                if ui.button(RichText::new("⏭").size(14.0)).on_hover_text("Jump to Last Frame (End)").clicked() {
+                if ui.button(">|").on_hover_text("Jump to End (End)").clicked() {
                     self.current_frame = count.saturating_sub(1);
                     self.update_preview_frame(&ctx);
                 }
 
                 ui.separator();
 
-                let loop_text = if self.loop_playback { "🔁 Loop: ON" } else { "➡️ Loop: OFF" };
+                let loop_text = if self.loop_playback { "Loop: On" } else { "Loop: Off" };
                 if ui.selectable_label(self.loop_playback, loop_text).on_hover_text("Toggle Playback Looping (L)").clicked() {
                     self.loop_playback = !self.loop_playback;
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new("Shortcuts: Space (Play) | ←/→ (Step) | Shift+←/→ (±10) | L (Loop)").color(colors::TEXT_FAINT).size(11.0));
+                    ui.label(RichText::new("Space: Play/Pause | Left/Right: Step | L: Loop").color(colors::TEXT_FAINT).size(11.0));
                 });
             });
         });
@@ -1010,18 +1008,18 @@ impl HapStudioApp {
 
         inspector_frame.show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.heading(RichText::new("📊 Stream Technical Inspection").size(14.0).color(colors::TEXT_PRIMARY));
+                ui.heading(RichText::new("Stream Information").size(14.0).color(colors::TEXT_PRIMARY));
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("📋 Copy Media Info").clicked() {
+                    if ui.button("Copy Summary").clicked() {
                         let report = format!(
-                            "HAP Stream Information\nFile: {:?}\nFormat: {} [{}]\nResolution: {}x{}\nFrame Rate: {:.2} fps\nTotal Frames: {}\nDuration: {:.2}s\nAlpha Support: {}\nSecond-Stage Compression: Snappy",
+                            "HAP Stream Information\nFile: {:?}\nFormat: {} [{}]\nResolution: {}x{}\nFrame Rate: {:.2} fps\nTotal Frames: {}\nDuration: {:.2}s\nAlpha: {}\nCompression: Snappy",
                             self.mov_path, format.name(), String::from_utf8_lossy(&format.fourcc()),
                             width, height, fps, count, duration,
                             if format.has_alpha() { "Yes" } else { "No" }
                         );
                         ui.copy_text(report);
-                        self.notify("Media specs copied to clipboard!", colors::ACCENT_CYAN);
+                        self.notify("Stream information copied to clipboard", colors::ACCENT_CYAN);
                     }
                 });
             });
@@ -1029,13 +1027,13 @@ impl HapStudioApp {
             ui.add_space(6.0);
 
             egui::Grid::new("stream_specs_grid").striped(true).spacing([24.0, 6.0]).show(ui, |ui| {
-                ui.label(RichText::new("Codec Flavour:").color(colors::TEXT_MUTED));
+                ui.label(RichText::new("Codec Format:").color(colors::TEXT_MUTED));
                 ui.horizontal(|ui| {
                     render_badge(ui, format.name(), colors::BG_ELEVATED, colors::ACCENT_CYAN);
                     ui.label(format!("(FourCC: {})", String::from_utf8_lossy(&format.fourcc())));
                 });
 
-                ui.label(RichText::new("File Size on Disk:").color(colors::TEXT_MUTED));
+                ui.label(RichText::new("File Size:").color(colors::TEXT_MUTED));
                 let size_str = self
                     .mov_path
                     .as_ref()
@@ -1045,29 +1043,29 @@ impl HapStudioApp {
                 ui.label(size_str);
                 ui.end_row();
 
-                ui.label(RichText::new("Native Resolution:").color(colors::TEXT_MUTED));
+                ui.label(RichText::new("Resolution:").color(colors::TEXT_MUTED));
                 ui.label(format!("{} × {} ({:.2}:1)", width, height, width as f32 / height as f32));
                 ui.end_row();
 
-                ui.label(RichText::new("Duration & Frames:").color(colors::TEXT_MUTED));
-                ui.label(format!("{} frames ({:.2} seconds @ {:.2} fps)", count, duration, fps));
+                ui.label(RichText::new("Duration:").color(colors::TEXT_MUTED));
+                ui.label(format!("{} frames ({:.2}s @ {:.2} fps)", count, duration, fps));
 
                 ui.label(RichText::new("Alpha Channel:").color(colors::TEXT_MUTED));
                 ui.label(if format.has_alpha() {
-                    RichText::new("Available (Transparent Matte)").color(colors::ACCENT_GREEN)
+                    RichText::new("Present").color(colors::ACCENT_GREEN)
                 } else {
-                    RichText::new("None (Opaque RGB)").color(colors::TEXT_MUTED)
+                    RichText::new("None (Opaque)").color(colors::TEXT_MUTED)
                 });
                 ui.end_row();
 
-                ui.label(RichText::new("Container Architecture:").color(colors::TEXT_MUTED));
-                ui.label("QuickTime MOV (Pure Rust Demuxer)");
+                ui.label(RichText::new("Container:").color(colors::TEXT_MUTED));
+                ui.label("QuickTime MOV");
 
-                ui.label(RichText::new("Hardware Acceleration:").color(colors::TEXT_MUTED));
+                ui.label(RichText::new("Decoding Mode:").color(colors::TEXT_MUTED));
                 ui.label(if self.gpu_supports_bc {
-                    RichText::new("Direct VRAM Texture Upload (wgpu)").color(colors::ACCENT_GREEN)
+                    RichText::new("Direct GPU Texture Upload").color(colors::ACCENT_GREEN)
                 } else {
-                    RichText::new("Multi-Core Rayon SIMD (CPU)").color(colors::ACCENT_AMBER)
+                    RichText::new("Software Decode (Rayon)").color(colors::ACCENT_AMBER)
                 });
                 ui.end_row();
             });
@@ -1083,12 +1081,12 @@ impl HapStudioApp {
         let ctx = ui.ctx().clone();
 
         ui.horizontal(|ui| {
-            ui.heading(RichText::new("🚀 HAP Video Encoder").size(18.0).color(Color32::WHITE));
-            ui.label(RichText::new("Encode PNG, JPEG, TIFF or WebP image sequences into high-performance HAP MOV files.").color(colors::TEXT_MUTED));
+            ui.heading(RichText::new("Video Encoder").size(18.0).color(Color32::WHITE));
+            ui.label(RichText::new("Encode an image sequence to a QuickTime HAP MOV file.").color(colors::TEXT_MUTED));
         });
         ui.add_space(8.0);
 
-        // --- 1. INPUT SEQUENCE CARD ---
+        // --- SOURCE SEQUENCE CARD ---
         let input_frame = egui::Frame::canvas(ui.style())
             .fill(colors::BG_CARD)
             .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
@@ -1097,16 +1095,16 @@ impl HapStudioApp {
 
         input_frame.show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.strong(RichText::new("1. Source Image Sequence").size(15.0));
+                ui.strong(RichText::new("Source Sequence").size(14.0));
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("📄 Select Single File...").clicked() {
+                    if ui.button("Select File...").clicked() {
                         if let Some(file) = rfd::FileDialog::new().pick_file() {
                             self.enc_input_path = Some(file);
                             self.scan_encoder_input(&ctx);
                         }
                     }
-                    if ui.button("📁 Choose Folder...").clicked() {
+                    if ui.button("Choose Folder...").clicked() {
                         if let Some(folder) = rfd::FileDialog::new().pick_folder() {
                             self.enc_input_path = Some(folder);
                             self.scan_encoder_input(&ctx);
@@ -1131,8 +1129,8 @@ impl HapStudioApp {
                         ui.add_space(2.0);
 
                         ui.horizontal(|ui| {
-                            render_badge(ui, &format!("{} FRAMES", self.enc_detected_frames), colors::BG_ELEVATED, colors::ACCENT_CYAN);
-                            render_badge(ui, &format!("{} × {}", self.enc_detected_w, self.enc_detected_h), colors::BG_ELEVATED, colors::TEXT_PRIMARY);
+                            render_badge(ui, &format!("{} frames", self.enc_detected_frames), colors::BG_ELEVATED, colors::ACCENT_CYAN);
+                            render_badge(ui, &format!("{}x{}", self.enc_detected_w, self.enc_detected_h), colors::BG_ELEVATED, colors::TEXT_PRIMARY);
 
                             if let (Some(ref first), Some(ref last)) = (&self.enc_detected_first_name, &self.enc_detected_last_name) {
                                 ui.label(RichText::new(format!("Range: {} ... {}", first, last)).color(colors::TEXT_FAINT));
@@ -1143,7 +1141,7 @@ impl HapStudioApp {
             } else {
                 ui.vertical_centered(|ui| {
                     ui.add_space(10.0);
-                    ui.label(RichText::new("Drag & Drop an image folder here, or click 'Choose Folder...' to begin.").color(colors::TEXT_MUTED));
+                    ui.label(RichText::new("Drop an image folder here, or click 'Choose Folder...'").color(colors::TEXT_MUTED));
                     ui.add_space(10.0);
                 });
             }
@@ -1151,7 +1149,7 @@ impl HapStudioApp {
 
         ui.add_space(8.0);
 
-        // --- 2. PRESETS SELECTION ---
+        // --- PRESETS ---
         let presets_frame = egui::Frame::canvas(ui.style())
             .fill(colors::BG_CARD)
             .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
@@ -1159,7 +1157,7 @@ impl HapStudioApp {
             .inner_margin(egui::Margin::same(12));
 
         presets_frame.show(ui, |ui| {
-            ui.strong(RichText::new("2. Select Encoding Preset").size(15.0));
+            ui.strong(RichText::new("Presets").size(14.0));
             ui.add_space(6.0);
 
             ui.horizontal_wrapped(|ui| {
@@ -1194,7 +1192,7 @@ impl HapStudioApp {
 
         ui.add_space(8.0);
 
-        // --- 3. PARAMETERS & SETTINGS ---
+        // --- CODEC SETTINGS ---
         let settings_frame = egui::Frame::canvas(ui.style())
             .fill(colors::BG_CARD)
             .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
@@ -1202,21 +1200,21 @@ impl HapStudioApp {
             .inner_margin(egui::Margin::same(12));
 
         settings_frame.show(ui, |ui| {
-            ui.strong(RichText::new("3. Codec & Output Parameters").size(15.0));
+            ui.strong(RichText::new("Codec Settings").size(14.0));
             ui.add_space(6.0);
 
             egui::Grid::new("enc_params_grid").spacing([24.0, 8.0]).show(ui, |ui| {
-                ui.label(RichText::new("Target Flavour:").color(colors::TEXT_MUTED));
+                ui.label(RichText::new("Format:").color(colors::TEXT_MUTED));
                 egui::ComboBox::from_id_salt("flavour_combo")
                     .selected_text(self.enc_format.name())
                     .show_ui(ui, |ui| {
                         let old_f = self.enc_format;
-                        ui.selectable_value(&mut self.enc_format, HapFormat::HapY, "Hap Q - Scaled YCoCg DXT5 (High Quality)");
-                        ui.selectable_value(&mut self.enc_format, HapFormat::Hap7, "Hap R (Hap 7) - BC7 UNORM (Ultra Quality)");
-                        ui.selectable_value(&mut self.enc_format, HapFormat::HapM, "Hap Q Alpha - Dual Stream Color + Alpha");
-                        ui.selectable_value(&mut self.enc_format, HapFormat::Hap1, "Hap 1 - RGB DXT1 (Smallest / Fast)");
-                        ui.selectable_value(&mut self.enc_format, HapFormat::Hap5, "Hap Alpha - RGBA DXT5 (Transparency)");
-                        ui.selectable_value(&mut self.enc_format, HapFormat::HapA, "Hap Alpha-Only - BC4 Single Channel");
+                        ui.selectable_value(&mut self.enc_format, HapFormat::HapY, "Hap Q (Scaled YCoCg)");
+                        ui.selectable_value(&mut self.enc_format, HapFormat::Hap7, "Hap R (BC7)");
+                        ui.selectable_value(&mut self.enc_format, HapFormat::HapM, "Hap Q Alpha (Color + Alpha)");
+                        ui.selectable_value(&mut self.enc_format, HapFormat::Hap1, "Hap 1 (DXT1)");
+                        ui.selectable_value(&mut self.enc_format, HapFormat::Hap5, "Hap Alpha (DXT5)");
+                        ui.selectable_value(&mut self.enc_format, HapFormat::HapA, "Hap Alpha-Only (BC4)");
                         if old_f != self.enc_format {
                             self.enc_preset = EncoderPreset::Custom;
                             self.update_suggested_output_filename();
@@ -1224,7 +1222,7 @@ impl HapStudioApp {
                     });
                 ui.end_row();
 
-                ui.label(RichText::new("Frame Rate (FPS):").color(colors::TEXT_MUTED));
+                ui.label(RichText::new("Frame Rate:").color(colors::TEXT_MUTED));
                 ui.horizontal(|ui| {
                     ui.add(egui::DragValue::new(&mut self.enc_fps).speed(0.1).range(1.0..=120.0));
                     for f in [24.0, 25.0, 29.97, 30.0, 50.0, 60.0] {
@@ -1235,23 +1233,23 @@ impl HapStudioApp {
                 });
                 ui.end_row();
 
-                ui.label(RichText::new("Threading Chunks:").color(colors::TEXT_MUTED));
+                ui.label(RichText::new("Chunks:").color(colors::TEXT_MUTED));
                 ui.horizontal(|ui| {
                     egui::ComboBox::from_id_salt("chunks_picker_box")
                         .selected_text(format!("{} Chunks", self.enc_chunks))
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.enc_chunks, 1, "1 Chunk (Single Core)");
+                            ui.selectable_value(&mut self.enc_chunks, 1, "1 Chunk");
                             ui.selectable_value(&mut self.enc_chunks, 2, "2 Chunks");
-                            ui.selectable_value(&mut self.enc_chunks, 4, "4 Chunks (Recommended for 1080p)");
-                            ui.selectable_value(&mut self.enc_chunks, 8, "8 Chunks (Recommended for 4K)");
+                            ui.selectable_value(&mut self.enc_chunks, 4, "4 Chunks");
+                            ui.selectable_value(&mut self.enc_chunks, 8, "8 Chunks");
                             ui.selectable_value(&mut self.enc_chunks, 16, "16 Chunks");
                         });
 
-                    ui.checkbox(&mut self.enc_snappy, "Apply Snappy Compression (Recommended)");
+                    ui.checkbox(&mut self.enc_snappy, "Snappy Compression");
                 });
                 ui.end_row();
 
-                ui.label(RichText::new("Destination File:").color(colors::TEXT_MUTED));
+                ui.label(RichText::new("Output Destination:").color(colors::TEXT_MUTED));
                 ui.horizontal(|ui| {
                     if let Some(ref out) = self.enc_output_path {
                         ui.monospace(format!("{}", out.display()));
@@ -1259,7 +1257,7 @@ impl HapStudioApp {
                         ui.label(RichText::new("Not set").color(colors::TEXT_FAINT));
                     }
 
-                    if ui.button("💾 Change Destination...").clicked() {
+                    if ui.button("Change...").clicked() {
                         if let Some(dest) = rfd::FileDialog::new()
                             .add_filter("QuickTime Movie", &["mov"])
                             .save_file()
@@ -1274,14 +1272,14 @@ impl HapStudioApp {
 
         ui.add_space(10.0);
 
-        // --- 4. START ACTION & LIVE TELEMETRY ---
+        // --- ENCODE ACTIONS ---
         let can_start = self.enc_input_path.is_some()
             && self.enc_output_path.is_some()
             && self.enc_detected_frames > 0
             && self.enc_rx.is_none();
 
         ui.horizontal(|ui| {
-            let encode_btn = egui::Button::new(RichText::new("🚀 Start Encoding").size(17.0).strong())
+            let encode_btn = egui::Button::new(RichText::new("Start Encoding").size(15.0).strong())
                 .fill(colors::ACCENT_BLUE)
                 .corner_radius(CornerRadius::same(6));
 
@@ -1308,7 +1306,7 @@ impl HapStudioApp {
             }
 
             if self.enc_rx.is_some() {
-                if ui.button(RichText::new("🛑 Cancel Encode").color(colors::ACCENT_RED)).clicked() {
+                if ui.button(RichText::new("Cancel").color(colors::ACCENT_RED)).clicked() {
                     if let Some(ref cancel) = self.enc_cancel {
                         cancel.store(true, Ordering::Relaxed);
                     }
@@ -1330,7 +1328,7 @@ impl HapStudioApp {
             progress_frame.show(ui, |ui| {
                 match status {
                     WorkerProgress::Started { total } => {
-                        ui.label(format!("Starting encoding of {} frames...", total));
+                        ui.label(format!("Starting encode of {} frames...", total));
                     }
                     WorkerProgress::Progress { current, total, fps, percent } => {
                         ui.horizontal(|ui| {
@@ -1353,25 +1351,22 @@ impl HapStudioApp {
                         }
                     }
                     WorkerProgress::Finished { message } => {
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("✅").size(18.0));
-                            ui.label(RichText::new(message).color(colors::ACCENT_GREEN).strong());
-                        });
+                        ui.label(RichText::new(message).color(colors::ACCENT_GREEN).strong());
 
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
                             if let Some(ref mov) = self.enc_last_successful_mov {
-                                if ui.button(RichText::new("▶ Load into Player & Inspect").strong().color(colors::ACCENT_CYAN)).clicked() {
+                                if ui.button(RichText::new("Open in Player").strong().color(colors::ACCENT_CYAN)).clicked() {
                                     load_into_player = Some(mov.clone());
                                 }
-                                if ui.button("📂 Reveal in Explorer").clicked() {
+                                if ui.button("Show in Explorer").clicked() {
                                     reveal_in_file_manager(mov);
                                 }
                             }
                         });
                     }
                     WorkerProgress::Error(err) => {
-                        ui.label(RichText::new(format!("❌ Encode Error: {}", err)).color(colors::ACCENT_RED).strong());
+                        ui.label(RichText::new(format!("Encode error: {}", err)).color(colors::ACCENT_RED).strong());
                     }
                 }
             });
@@ -1389,8 +1384,8 @@ impl HapStudioApp {
 // ---------------------------------------------------------------------------
 impl HapStudioApp {
     fn show_diagnostics_tab(&mut self, ui: &mut egui::Ui) {
-        ui.heading(RichText::new("🛠 System & Hardware Diagnostics").size(18.0));
-        ui.label(RichText::new("Real-time GPU capability telemetry and application event logs.").color(colors::TEXT_MUTED));
+        ui.heading(RichText::new("System & Diagnostics").size(18.0));
+        ui.label(RichText::new("GPU capabilities, threading, and runtime event log.").color(colors::TEXT_MUTED));
         ui.add_space(8.0);
 
         let diag_frame = egui::Frame::canvas(ui.style())
@@ -1401,28 +1396,28 @@ impl HapStudioApp {
 
         diag_frame.show(ui, |ui| {
             egui::Grid::new("diag_grid").striped(true).spacing([24.0, 8.0]).show(ui, |ui| {
-                ui.strong("GPU Adapter Name:");
+                ui.strong("GPU Adapter:");
                 ui.label(&self.gpu_adapter_name);
                 ui.end_row();
 
-                ui.strong("Graphics Backend API:");
+                ui.strong("Graphics API:");
                 ui.label(&self.gpu_backend_name);
                 ui.end_row();
 
-                ui.strong("Hardware BC Texture Compression:");
+                ui.strong("BC Texture Compression:");
                 ui.horizontal(|ui| {
                     if self.gpu_supports_bc {
-                        render_badge(ui, "SUPPORTED", Color32::from_rgb(16, 50, 35), colors::ACCENT_GREEN);
-                        ui.label("Direct VRAM upload enabled (zero-copy hardware decompression)");
+                        render_badge(ui, "Hardware Supported", Color32::from_rgb(16, 40, 30), colors::ACCENT_GREEN);
+                        ui.label("Direct VRAM upload enabled");
                     } else {
-                        render_badge(ui, "UNSUPPORTED", Color32::from_rgb(50, 45, 20), colors::ACCENT_AMBER);
-                        ui.label("Using pure Rust CPU SIMD decompression");
+                        render_badge(ui, "CPU Fallback", Color32::from_rgb(38, 35, 25), colors::TEXT_MUTED);
+                        ui.label("Software decompression");
                     }
                 });
                 ui.end_row();
 
-                ui.strong("Rayon Thread Pool:");
-                ui.label(format!("{} worker threads", rayon::current_num_threads()));
+                ui.strong("Worker Threads:");
+                ui.label(format!("{} threads (Rayon)", rayon::current_num_threads()));
                 ui.end_row();
             });
         });
@@ -1438,24 +1433,24 @@ impl HapStudioApp {
 
         log_frame.show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.strong(RichText::new("Application Event & Activity Log").size(15.0));
+                ui.strong(RichText::new("Activity Log").size(14.0));
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("🗑 Clear Logs").clicked() {
+                    if ui.button("Clear").clicked() {
                         self.system_logs.clear();
                     }
-                    if ui.button("📋 Copy Logs").clicked() {
+                    if ui.button("Copy Logs").clicked() {
                         let text = self.system_logs.join("\n");
                         ui.copy_text(text);
-                        self.notify("Logs copied to clipboard!", colors::ACCENT_CYAN);
+                        self.notify("Logs copied to clipboard", colors::ACCENT_CYAN);
                     }
                 });
             });
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.log_search).hint_text("🔍 Filter logs..."));
-                if !self.log_search.is_empty() && ui.button("✖").clicked() {
+                ui.add(egui::TextEdit::singleline(&mut self.log_search).hint_text("Filter logs..."));
+                if !self.log_search.is_empty() && ui.button("Clear filter").clicked() {
                     self.log_search.clear();
                 }
             });
