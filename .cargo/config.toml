@@ -1,0 +1,5 @@
+[build]
+target-dir = "C:/Users/LEEBRO~1/Documents/hap/target"
+
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "link-self-contained=yes"]

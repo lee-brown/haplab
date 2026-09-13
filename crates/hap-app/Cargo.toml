@@ -1,0 +1,34 @@
+[package]
+name = "hap-app"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Pure Rust HAP video encoder, decoder, and visual inspector GUI / CLI tool"
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "hap"
+path = "src/main.rs"
+
+[dependencies]
+hap-core = { path = "../hap-core" }
+hap-gpu = { path = "../hap-gpu" }
+eframe = { version = "0.35", default-features = false, features = ["default_fonts", "wgpu"] }
+egui = "0.35"
+wgpu = "29.0"
+clap = { version = "4.6", features = ["derive"] }
+rfd = "0.17"
+crossbeam-channel = "0.5"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "webp", "tiff", "tga"] }
+chrono = "0.4"
+env_logger = "0.11"
+log = "0.4"
+pollster = "0.4"
+anyhow = "1.0"
+thiserror = "2.0"
+byteorder = "1.5"
+snap = "1.1"
+rayon = "1.12"

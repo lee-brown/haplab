@@ -1,0 +1,21 @@
+[package]
+name = "hap-gpu"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "wgpu-based hardware acceleration for HAP video encoding and decoding"
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+hap-core = { path = "../hap-core" }
+wgpu = "29.0"
+bytemuck = { version = "1.21", features = ["derive"] }
+pollster = "0.4"
+thiserror = "2.0"
+log = "0.4"
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
