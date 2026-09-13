@@ -1420,7 +1420,7 @@ impl HapLabApp {
                 if let Some(ref s) = self.stream_summary {
                     ui.label(RichText::new(format!("{:.1}% saved ({:.1}:1 ratio)", s.savings_percent, s.avg_compression_ratio)).color(colors::ACCENT_GREEN));
                 } else {
-                    ui.label("—");
+                    ui.label("-");
                 }
                 ui.end_row();
 
@@ -1749,14 +1749,14 @@ impl HapLabApp {
                 ui.label(RichText::new("Color Levels:").color(colors::TEXT_MUTED));
                 egui::ComboBox::from_id_salt("color_range_combo")
                     .selected_text(match self.enc_color_range {
-                        ColorRange::Full => "Full Range (0–255 PC / Graphics)",
-                        ColorRange::Limited => "Limited Range (16–235 Studio Video -> Expand)",
+                        ColorRange::Full => "Full Range (0-255 PC / Graphics)",
+                        ColorRange::Limited => "Limited Range (16-235 Studio Video -> Expand)",
                     })
                     .show_ui(ui, |ui| {
-                        if ui.selectable_value(&mut self.enc_color_range, ColorRange::Full, "Full Range (0–255 PC / Graphics / Unreal)").clicked() {
+                        if ui.selectable_value(&mut self.enc_color_range, ColorRange::Full, "Full Range (0-255 PC / Graphics / Unreal)").clicked() {
                             self.enc_preset = EncoderPreset::Custom;
                         }
-                        if ui.selectable_value(&mut self.enc_color_range, ColorRange::Limited, "Limited Range (16–235 Studio Video -> Expand to 0–255)").clicked() {
+                        if ui.selectable_value(&mut self.enc_color_range, ColorRange::Limited, "Limited Range (16-235 Studio Video -> Expand to 0-255)").clicked() {
                             self.enc_preset = EncoderPreset::Custom;
                         }
                     });

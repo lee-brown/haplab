@@ -176,8 +176,8 @@ writer.finish()?;
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-repo/hap.git
-cd hap
+git clone https://github.com/lee-brown/haplab.git
+cd haplab
 
 # Run test suite
 cargo test --workspace
@@ -195,6 +195,6 @@ The compiled binary will be located at `target/release/haplab.exe` (Windows) or 
 This project is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE.md).
 
 - **Non-Commercial & Personal Use**: You are free to view, compile, run, modify, and distribute this software for personal projects, learning, testing, and academic research.
-- **Commercial Use & Cloud Services**: Commercial use—including hosting or operating this software as a software-as-a-service (SaaS), cloud service, or API (e.g. on AWS, GCP, Azure), or embedding it into commercial broadcast/media products—is strictly prohibited without a separate commercial license from the author.
+- **Commercial Use & Cloud Services**: Commercial use (including hosting or operating this software as a software-as-a-service (SaaS), cloud service, or API such as on AWS, GCP, or Azure, or embedding it into commercial broadcast/media products) is strictly prohibited without a separate commercial license from the author.
 - **Commercial Licensing**: For commercial licensing inquiries, enterprise deployment, or cloud API authorization, contact **Lee Brown**.
 
