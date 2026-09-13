@@ -14,7 +14,9 @@ use std::time::Instant;
 pub struct BenchmarkScore {
     pub test_name: String,
     pub resolution: String,
+    #[allow(dead_code)]
     pub frame_count: usize,
+    #[allow(dead_code)]
     pub elapsed_secs: f64,
     pub fps: f64,
     pub frame_time_ms: f64,
