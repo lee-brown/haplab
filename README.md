@@ -1,11 +1,11 @@
-# hap-rs
+# hap-rs / HapLab
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm_Noncommercial_1.0.0-crimson.svg)](https://polyformproject.org/licenses/noncommercial/1.0.0)
 [![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 
 A native Rust implementation of the [HAP Video Codec specification](https://github.com/vidvox/hap).
 
-Built for real-time video playback, media servers, and interactive installations. Provides decoder, encoder, and QuickTime container demuxing/muxing without external C dependencies, under the MIT License.
+Built for real-time video playback, media servers, transcode pipelines, and interactive installations. Provides decoder, encoder, hardware texture streaming, and QuickTime container demuxing/muxing in pure, safe Rust.
 
 ---
 
@@ -186,10 +186,15 @@ cargo test --workspace
 cargo build --release -p hap-app
 ```
 
-The compiled binary will be located at `target/release/hap.exe` (Windows) or `target/release/hap` (Linux/macOS).
+The compiled binary will be located at `target/release/haplab.exe` (Windows) or `target/release/haplab` (Linux/macOS).
 
 ---
 
 ## License
 
-MIT License. See [LICENSE-MIT](LICENSE-MIT) for details.
+This project is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE.md).
+
+- **Non-Commercial & Personal Use**: You are free to view, compile, run, modify, and distribute this software for personal projects, learning, testing, and academic research.
+- **Commercial Use & Cloud Services**: Commercial use—including hosting or operating this software as a software-as-a-service (SaaS), cloud service, or API (e.g. on AWS, GCP, Azure), or embedding it into commercial broadcast/media products—is strictly prohibited without a separate commercial license from the author.
+- **Commercial Licensing**: For commercial licensing inquiries, enterprise deployment, or cloud API authorization, contact **Lee Brown**.
+
