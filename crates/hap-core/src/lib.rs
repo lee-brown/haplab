@@ -199,4 +199,49 @@ mod tests {
         let fps = count as f64 / elapsed.as_secs_f64();
         println!("\n>>> HAP-CORE 1080p IN-MEMORY DECODE: {} frames in {:.4}s = {:.1} FPS ({:.2} ms/frame) <<<\n", count, elapsed.as_secs_f64(), fps, (elapsed.as_secs_f64() * 1000.0) / count as f64);
     }
+
+    #[test]
+    fn test_8k_resolution_support() {
+        let (w, h) = (7680, 4320); // 8K UHD
+        assert_eq!(w % 4, 0);
+        assert_eq!(h % 4, 0);
+
+        // Allocate 8K frame buffer (132 MB)
+        let mut rgba = vec![128u8; w * h * 4];
+        rgba[0] = 255;
+        rgba[1] = 0;
+        rgba[2] = 128;
+        rgba[3] = 255;
+
+        let opts = EncodeOptions {
+            format: HapFormat::Hap1,
+            chunk_count: 8,
+            use_snappy: true,
+            color_range: ColorRange::Full,
+            alpha_mode: AlphaMode::Straight,
+            dither_mode: DitherMode::None,
+            quality: QualityPreset::Draft,
+        };
+
+        let start_enc = std::time::Instant::now();
+        let packet = encode_frame_with_options(&rgba, w, h, &opts).expect("8K encode failed");
+        let enc_time = start_enc.elapsed();
+
+        assert!(!packet.is_empty());
+        println!("\n>>> 8K UHD (7680x4320) ENCODE: {:.2} ms (packet size: {} bytes, savings: {:.1}%) <<<",
+            enc_time.as_secs_f64() * 1000.0,
+            packet.len(),
+            (1.0 - (packet.len() as f64 / (w * h * 4) as f64)) * 100.0
+        );
+
+        let start_dec = std::time::Instant::now();
+        let decoded = decode_frame_to_rgba(&packet, w, h).expect("8K decode failed");
+        let dec_time = start_dec.elapsed();
+
+        assert_eq!(decoded.len(), rgba.len());
+        println!(">>> 8K UHD (7680x4320) DECODE: {:.2} ms ({:.1} FPS) <<<\n",
+            dec_time.as_secs_f64() * 1000.0,
+            1.0 / dec_time.as_secs_f64()
+        );
+    }
 }
