@@ -136,6 +136,10 @@ impl QtHapReader {
         self.samples.len()
     }
 
+    pub fn samples(&self) -> &[FrameSample] {
+        &self.samples
+    }
+
     /// Read the raw HAP frame packet for a given 0-indexed frame.
     pub fn read_frame_packet(&mut self, frame_idx: usize) -> Result<Vec<u8>, MovReaderError> {
         if frame_idx >= self.samples.len() {

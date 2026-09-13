@@ -4,6 +4,8 @@ use super::theme::{
     apply_studio_theme, colors, format_bytes, format_smpte_timecode,
     paint_transparency_checkerboard, render_badge, reveal_in_file_manager,
 };
+use crate::benchmark::{spawn_benchmark_worker, BenchmarkProgress, BenchmarkScore};
+use crate::platform::{open_windows_default_apps, register_mov_association};
 use crate::worker::{
     spawn_encode_worker, spawn_export_worker, EncodeJobConfig, WorkerProgress,
 };
@@ -12,7 +14,8 @@ use eframe::egui::{
     self, Color32, CornerRadius, Rect, RichText, Stroke, TextureOptions, Vec2,
 };
 use hap_core::{
-    decode_frame_to_rgba, AlphaMode, ColorRange, DitherMode, HapFormat, QualityPreset, QtHapReader,
+    audit_hap_stream, decode_frame_to_rgba, extract_stream_summary, AlphaMode, ColorRange,
+    DitherMode, FaultSeverity, HapFormat, QualityPreset, QtHapReader, StreamAudit, StreamSummary,
 };
 use image::GenericImageView;
 use std::fs;
@@ -25,6 +28,7 @@ use std::time::Instant;
 pub enum ActiveTab {
     PlayerInspector,
     Encoder,
+    Benchmark,
     Diagnostics,
 }
 
@@ -97,6 +101,17 @@ pub struct HapLabApp {
     export_cancel: Option<Arc<AtomicBool>>,
     export_status: Option<WorkerProgress>,
 
+    // --- Live Stream Evaluation & Fault Audit ---
+    last_decode_ms: f32,
+    last_packet_bytes: usize,
+    playback_fps: f32,
+    playback_frames_count: usize,
+    playback_timer: Instant,
+    stream_summary: Option<StreamSummary>,
+    stream_audit: Option<StreamAudit>,
+    is_auditing: bool,
+    show_audit_view: bool,
+
     // --- Encoder State ---
     enc_input_path: Option<PathBuf>,
     enc_output_path: Option<PathBuf>,
@@ -120,6 +135,16 @@ pub struct HapLabApp {
     enc_cancel: Option<Arc<AtomicBool>>,
     enc_status: Option<WorkerProgress>,
     enc_last_successful_mov: Option<PathBuf>,
+
+    // --- Hardware Benchmarking State ---
+    bench_scores: Vec<BenchmarkScore>,
+    bench_rx: Option<Receiver<BenchmarkProgress>>,
+    bench_cancel: Option<Arc<AtomicBool>>,
+    bench_current_test: Option<String>,
+    bench_current_step: usize,
+    bench_total_steps: usize,
+    bench_current_fps: f32,
+    bench_is_running: bool,
 
     // --- System / Hardware State ---
     gpu_adapter_name: String,
@@ -170,6 +195,16 @@ impl Default for HapLabApp {
             export_cancel: None,
             export_status: None,
 
+            last_decode_ms: 0.0,
+            last_packet_bytes: 0,
+            playback_fps: 0.0,
+            playback_frames_count: 0,
+            playback_timer: Instant::now(),
+            stream_summary: None,
+            stream_audit: None,
+            is_auditing: false,
+            show_audit_view: false,
+
             enc_input_path: None,
             enc_output_path: None,
             enc_detected_frames: 0,
@@ -192,6 +227,15 @@ impl Default for HapLabApp {
             enc_cancel: None,
             enc_status: None,
             enc_last_successful_mov: None,
+
+            bench_scores: Vec::new(),
+            bench_rx: None,
+            bench_cancel: None,
+            bench_current_test: None,
+            bench_current_step: 0,
+            bench_total_steps: 0,
+            bench_current_fps: 0.0,
+            bench_is_running: false,
 
             gpu_adapter_name: adapter_name,
             gpu_backend_name: backend_name,
@@ -321,7 +365,7 @@ impl HapLabApp {
 
     pub fn open_mov_file(&mut self, path: PathBuf, ctx: &egui::Context) {
         match QtHapReader::open(&path) {
-            Ok(reader) => {
+            Ok(mut reader) => {
                 let filename = path
                     .file_name()
                     .map(|f| f.to_string_lossy().to_string())
@@ -339,6 +383,11 @@ impl HapLabApp {
                     format!("Loaded {}: {} frames", filename, reader.frame_count()),
                     colors::ACCENT_GREEN,
                 );
+                let file_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                self.stream_summary = extract_stream_summary(&mut reader, file_size).ok();
+                self.stream_audit = None;
+                self.show_audit_view = false;
+
                 self.reader = Some(reader);
                 self.mov_path = Some(path);
                 self.current_frame = 0;
@@ -363,7 +412,10 @@ impl HapLabApp {
                 .min(reader.frame_count().saturating_sub(1));
 
             if let Ok(packet) = reader.read_frame_packet(frame_idx) {
+                self.last_packet_bytes = packet.len();
+                let decode_start = Instant::now();
                 if let Ok(mut rgba) = decode_frame_to_rgba(&packet, width, height) {
+                    self.last_decode_ms = decode_start.elapsed().as_secs_f32() * 1000.0;
                     self.raw_frame_cache = Some(rgba.clone());
                     self.rebuild_texture_from_cache(ctx, width, height, &mut rgba);
                 }
@@ -563,6 +615,14 @@ impl eframe::App for HapLabApp {
                     }
                     self.last_frame_time = Instant::now();
                     self.update_preview_frame(ctx);
+
+                    self.playback_frames_count += 1;
+                    let elapsed = self.playback_timer.elapsed().as_secs_f32();
+                    if elapsed >= 0.5 {
+                        self.playback_fps = (self.playback_frames_count as f32) / elapsed;
+                        self.playback_frames_count = 0;
+                        self.playback_timer = Instant::now();
+                    }
                 }
                 ctx.request_repaint();
             }
@@ -614,6 +674,65 @@ impl eframe::App for HapLabApp {
                     }
                     _ => {
                         self.export_status = Some(msg);
+                    }
+                }
+            }
+            ctx.request_repaint();
+        }
+
+        let bench_msgs: Vec<_> = if let Some(ref rx) = self.bench_rx {
+            let mut msgs = Vec::new();
+            while let Ok(msg) = rx.try_recv() {
+                msgs.push(msg);
+            }
+            msgs
+        } else {
+            Vec::new()
+        };
+
+        if !bench_msgs.is_empty() {
+            for msg in bench_msgs {
+                match msg {
+                    BenchmarkProgress::Started { test_name } => {
+                        self.bench_current_test = Some(test_name);
+                        self.bench_current_step = 0;
+                        self.bench_total_steps = 1;
+                        self.bench_current_fps = 0.0;
+                    }
+                    BenchmarkProgress::StepProgress {
+                        test_name,
+                        current,
+                        total,
+                        current_fps,
+                    } => {
+                        self.bench_current_test = Some(test_name);
+                        self.bench_current_step = current;
+                        self.bench_total_steps = total;
+                        self.bench_current_fps = current_fps;
+                    }
+                    BenchmarkProgress::TestCompleted(score) => {
+                        self.log(&format!(
+                            "Benchmark [{}] complete: {:.1} FPS ({:.2} ms), {:.2} GB/s",
+                            score.test_name, score.fps, score.frame_time_ms, score.bandwidth_gbps
+                        ));
+                        self.bench_scores.retain(|s| s.test_name != score.test_name);
+                        self.bench_scores.push(score);
+                    }
+                    BenchmarkProgress::AllFinished { summary } => {
+                        self.bench_scores = summary;
+                        self.bench_is_running = false;
+                        self.bench_current_test = None;
+                        self.notify("Benchmark suite completed successfully!", colors::ACCENT_GREEN);
+                        self.bench_rx = None;
+                        break;
+                    }
+                    BenchmarkProgress::Error(err) => {
+                        self.bench_is_running = false;
+                        self.bench_current_test = None;
+                        self.log(&format!("Benchmark error: {}", err));
+                        self.notify(format!("Benchmark failed: {}", err), colors::ACCENT_RED);
+                        self.bench_rx = None;
+                        break;
                     }
                 }
             }
@@ -681,6 +800,17 @@ impl eframe::App for HapLabApp {
                         self.active_tab = ActiveTab::Encoder;
                     }
 
+                    let bench_badge = if self.bench_is_running {
+                        Some(1)
+                    } else if !self.bench_scores.is_empty() {
+                        Some(self.bench_scores.len())
+                    } else {
+                        None
+                    };
+                    if tab_btn(ui, self.active_tab == ActiveTab::Benchmark, "Benchmark", bench_badge) {
+                        self.active_tab = ActiveTab::Benchmark;
+                    }
+
                     if tab_btn(ui, self.active_tab == ActiveTab::Diagnostics, "Diagnostics", None) {
                         self.active_tab = ActiveTab::Diagnostics;
                     }
@@ -708,6 +838,7 @@ impl eframe::App for HapLabApp {
                         match self.active_tab {
                             ActiveTab::PlayerInspector => self.show_player_tab(ui),
                             ActiveTab::Encoder => self.show_encoder_tab(ui),
+                            ActiveTab::Benchmark => self.show_benchmark_tab(ui),
                             ActiveTab::Diagnostics => self.show_diagnostics_tab(ui),
                         }
                         ui.add_space(32.0);
@@ -903,7 +1034,76 @@ impl HapLabApp {
             });
         }
 
-        ui.add_space(10.0);
+        ui.add_space(8.0);
+
+        // --- LIVE STATS HUD BAR ---
+        let hud_frame = egui::Frame::canvas(ui.style())
+            .fill(colors::BG_CARD)
+            .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
+            .corner_radius(CornerRadius::same(6))
+            .inner_margin(egui::Margin::symmetric(14, 8));
+
+        hud_frame.show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("TELEMETRY:").size(11.0).color(colors::TEXT_FAINT).strong());
+                ui.separator();
+
+                // Rendered Playback FPS
+                ui.label(RichText::new("Playback FPS:").size(12.0).color(colors::TEXT_MUTED));
+                if self.is_playing {
+                    let fps_color = if self.playback_fps >= (fps - 1.0) {
+                        colors::ACCENT_GREEN
+                    } else if self.playback_fps >= (fps * 0.75) {
+                        colors::ACCENT_AMBER
+                    } else {
+                        colors::ACCENT_RED
+                    };
+                    ui.label(RichText::new(format!("{:.1} FPS", self.playback_fps)).size(12.5).color(fps_color).strong());
+                } else {
+                    ui.label(RichText::new("Paused").size(12.0).color(colors::TEXT_FAINT));
+                }
+
+                ui.separator();
+
+                // Frame Decode Latency
+                ui.label(RichText::new("Frame Latency:").size(12.0).color(colors::TEXT_MUTED));
+                let lat_color = if self.last_decode_ms < 5.0 {
+                    colors::ACCENT_GREEN
+                } else if self.last_decode_ms < 16.6 {
+                    colors::ACCENT_CYAN
+                } else {
+                    colors::ACCENT_AMBER
+                };
+                ui.label(RichText::new(format!("{:.2} ms", self.last_decode_ms)).size(12.5).color(lat_color).strong());
+
+                ui.separator();
+
+                // Packet Size
+                ui.label(RichText::new("Packet Size:").size(12.0).color(colors::TEXT_MUTED));
+                ui.label(RichText::new(format_bytes(self.last_packet_bytes as u64)).size(12.0).color(colors::TEXT_PRIMARY));
+
+                ui.separator();
+
+                // Compression Savings vs uncompressed RGBA
+                let uncompressed = (width as usize) * (height as usize) * 4;
+                if uncompressed > 0 && self.last_packet_bytes > 0 {
+                    let savings = (1.0 - (self.last_packet_bytes as f32 / uncompressed as f32)) * 100.0;
+                    ui.label(RichText::new("Savings:").size(12.0).color(colors::TEXT_MUTED));
+                    ui.label(RichText::new(format!("{:.1}%", savings)).size(12.0).color(colors::ACCENT_GREEN).strong());
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(ref summary) = self.stream_summary {
+                        render_badge(ui, &format!("{} Chunks", summary.chunk_count), colors::BG_ELEVATED, colors::ACCENT_CYAN);
+                        if summary.uses_snappy {
+                            render_badge(ui, "Snappy", colors::BG_ELEVATED, colors::ACCENT_BLUE);
+                        }
+                    }
+                });
+            });
+        });
+
+        ui.add_space(8.0);
 
         // --- MAIN VIEWPORT (Video Display) ---
         let avail_size = ui.available_size();
@@ -1053,18 +1253,48 @@ impl HapLabApp {
 
         inspector_frame.show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.heading(RichText::new("Stream Information").size(15.0).color(colors::TEXT_PRIMARY));
+                ui.heading(RichText::new("Stream Information & Technical Metrics").size(15.0).color(colors::TEXT_PRIMARY));
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(egui::Button::new("Copy Summary").min_size(Vec2::new(110.0, 30.0))).clicked() {
-                        let report = format!(
-                            "HAP Stream Information\nFile: {:?}\nFormat: {} [{}]\nResolution: {}x{}\nFrame Rate: {:.2} fps\nTotal Frames: {}\nDuration: {:.2}s\nAlpha: {}\nCompression: Snappy",
-                            self.mov_path, format.name(), String::from_utf8_lossy(&format.fourcc()),
-                            width, height, fps, count, duration,
-                            if format.has_alpha() { "Yes" } else { "No" }
-                        );
+                    if ui.add(egui::Button::new("Copy Summary").min_size(Vec2::new(105.0, 30.0))).clicked() {
+                        let report = if let Some(ref s) = self.stream_summary {
+                            format!(
+                                "HAP Stream Information\nFile: {:?}\nFormat: {} [{}]\nResolution: {}x{}\nFrame Rate: {:.2} fps\nTotal Frames: {}\nDuration: {:.2}s\nBitrate: {:.2} Mbps\nAvg Frame: {}\nCompression Ratio: {:.2}:1 ({:.1}% saved)\nChunks: {}\nSnappy: {}\nTexture Type: {}",
+                                self.mov_path, format.name(), String::from_utf8_lossy(&format.fourcc()),
+                                width, height, fps, count, duration,
+                                s.avg_bitrate_mbps, format_bytes(s.avg_frame_bytes as u64),
+                                s.avg_compression_ratio, s.savings_percent,
+                                s.chunk_count, s.uses_snappy, s.texture_type_name
+                            )
+                        } else {
+                            format!(
+                                "HAP Stream Information\nFile: {:?}\nFormat: {} [{}]\nResolution: {}x{}\nFrame Rate: {:.2} fps\nTotal Frames: {}\nDuration: {:.2}s\nAlpha: {}\nCompression: Snappy",
+                                self.mov_path, format.name(), String::from_utf8_lossy(&format.fourcc()),
+                                width, height, fps, count, duration,
+                                if format.has_alpha() { "Yes" } else { "No" }
+                            )
+                        };
                         ui.copy_text(report);
                         self.notify("Stream information copied to clipboard", colors::ACCENT_CYAN);
+                    }
+
+                    let audit_btn_text = if self.is_auditing {
+                        "Auditing..."
+                    } else if self.stream_audit.is_some() {
+                        "Re-run Health Audit"
+                    } else {
+                        "Audit Stream Health"
+                    };
+                    if ui.add(egui::Button::new(RichText::new(audit_btn_text).color(colors::ACCENT_CYAN).strong()).min_size(Vec2::new(145.0, 30.0))).clicked() {
+                        if let Some(ref mut reader) = self.reader {
+                            self.is_auditing = true;
+                            let audit = audit_hap_stream(reader, 120);
+                            self.stream_audit = Some(audit);
+                            self.show_audit_view = true;
+                            self.is_auditing = false;
+                            self.log("Stream health audit completed.");
+                            self.notify("Stream compliance audit complete.", colors::ACCENT_GREEN);
+                        }
                     }
                 });
             });
@@ -1090,10 +1320,25 @@ impl HapLabApp {
 
                 ui.label(RichText::new("Resolution:").color(colors::TEXT_MUTED));
                 ui.label(format!("{} × {} ({:.2}:1)", width, height, width as f32 / height as f32));
+
+                ui.label(RichText::new("Bitrate:").color(colors::TEXT_MUTED));
+                if let Some(ref s) = self.stream_summary {
+                    ui.label(format!("{:.2} Mbps", s.avg_bitrate_mbps));
+                } else {
+                    ui.label("Calculating...");
+                }
                 ui.end_row();
 
                 ui.label(RichText::new("Duration:").color(colors::TEXT_MUTED));
                 ui.label(format!("{} frames ({:.2}s @ {:.2} fps)", count, duration, fps));
+
+                ui.label(RichText::new("Frame Packet Size:").color(colors::TEXT_MUTED));
+                if let Some(ref s) = self.stream_summary {
+                    ui.label(format!("{} avg (min: {}, max: {})", format_bytes(s.avg_frame_bytes as u64), format_bytes(s.min_frame_bytes as u64), format_bytes(s.max_frame_bytes as u64)));
+                } else {
+                    ui.label(format_bytes(self.last_packet_bytes as u64));
+                }
+                ui.end_row();
 
                 ui.label(RichText::new("Alpha Channel:").color(colors::TEXT_MUTED));
                 ui.label(if format.has_alpha() {
@@ -1101,6 +1346,28 @@ impl HapLabApp {
                 } else {
                     RichText::new("None (Opaque)").color(colors::TEXT_MUTED)
                 });
+
+                ui.label(RichText::new("Compression Savings:").color(colors::TEXT_MUTED));
+                if let Some(ref s) = self.stream_summary {
+                    ui.label(RichText::new(format!("{:.1}% saved ({:.1}:1 ratio)", s.savings_percent, s.avg_compression_ratio)).color(colors::ACCENT_GREEN));
+                } else {
+                    ui.label("—");
+                }
+                ui.end_row();
+
+                ui.label(RichText::new("GPU Texture Target:").color(colors::TEXT_MUTED));
+                if let Some(ref s) = self.stream_summary {
+                    ui.label(s.texture_type_name);
+                } else {
+                    ui.label("BC Compressed Texture");
+                }
+
+                ui.label(RichText::new("Parallelism:").color(colors::TEXT_MUTED));
+                if let Some(ref s) = self.stream_summary {
+                    ui.label(format!("{} Chunks (Snappy: {})", s.chunk_count, if s.uses_snappy { "Enabled" } else { "None" }));
+                } else {
+                    ui.label("Standard");
+                }
                 ui.end_row();
 
                 ui.label(RichText::new("Container:").color(colors::TEXT_MUTED));
@@ -1115,6 +1382,70 @@ impl HapLabApp {
                 ui.end_row();
             });
         });
+
+        // --- STREAM FAULT AUDIT REPORT CARD ---
+        if self.show_audit_view {
+            if let Some(ref audit) = self.stream_audit {
+                ui.add_space(12.0);
+                let (border_color, status_title, status_bg, status_fg) = if audit.has_critical_errors() {
+                    (colors::ACCENT_RED, "CRITICAL FAULTS DETECTED", Color32::from_rgb(45, 20, 20), colors::ACCENT_RED)
+                } else if audit.has_warnings() {
+                    (colors::ACCENT_AMBER, "STREAM WARNINGS / ADVISORIES", Color32::from_rgb(45, 38, 15), colors::ACCENT_AMBER)
+                } else {
+                    (colors::ACCENT_GREEN, "STREAM AUDIT PASSED (100% SPECIFICATION COMPLIANT)", Color32::from_rgb(16, 40, 25), colors::ACCENT_GREEN)
+                };
+
+                let audit_frame = egui::Frame::canvas(ui.style())
+                    .fill(colors::BG_CARD)
+                    .stroke(Stroke::new(1.2, border_color))
+                    .corner_radius(CornerRadius::same(6))
+                    .inner_margin(egui::Margin::same(18));
+
+                audit_frame.show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        render_badge(ui, status_title, status_bg, status_fg);
+                        ui.label(RichText::new(format!("({} frames sampled)", audit.frames_scanned)).color(colors::TEXT_FAINT));
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add(egui::Button::new("Dismiss").min_size(Vec2::new(75.0, 26.0))).clicked() {
+                                self.show_audit_view = false;
+                            }
+                        });
+                    });
+
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+
+                    for check in &audit.checks {
+                        ui.horizontal(|ui| {
+                            match check.severity {
+                                FaultSeverity::Passed => {
+                                    render_badge(ui, "PASS", Color32::from_rgb(16, 40, 25), colors::ACCENT_GREEN);
+                                }
+                                FaultSeverity::Warning => {
+                                    render_badge(ui, "WARN", Color32::from_rgb(45, 38, 15), colors::ACCENT_AMBER);
+                                }
+                                FaultSeverity::Critical => {
+                                    render_badge(ui, "FAIL", Color32::from_rgb(45, 20, 20), colors::ACCENT_RED);
+                                }
+                            }
+
+                            ui.strong(check.check_name);
+                            ui.label(&check.message);
+                        });
+
+                        if let Some(ref rec) = check.recommendation {
+                            ui.horizontal(|ui| {
+                                ui.add_space(60.0);
+                                ui.label(RichText::new(format!("↳ Recommendation: {}", rec)).color(colors::ACCENT_CYAN));
+                            });
+                        }
+                        ui.add_space(4.0);
+                    }
+                });
+            }
+        }
     }
 }
 
@@ -1528,12 +1859,223 @@ impl HapLabApp {
 }
 
 // ---------------------------------------------------------------------------
-// TAB 3: DIAGNOSTICS & SYSTEM
+// TAB 3: HARDWARE BENCHMARK
+// ---------------------------------------------------------------------------
+impl HapLabApp {
+    fn show_benchmark_tab(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.heading(RichText::new("Hardware & Codec Benchmark").size(19.0).color(Color32::WHITE));
+            ui.label(RichText::new("Measure real-world HAP decompression latency, 4K multi-threaded decode, real-time encoding speed, and texture streaming bandwidth.").color(colors::TEXT_MUTED));
+        });
+        ui.add_space(10.0);
+
+        // --- HARDWARE SPEC & BENCHMARK CONTROLS CARD ---
+        let ctrl_frame = egui::Frame::canvas(ui.style())
+            .fill(colors::BG_CARD)
+            .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
+            .corner_radius(CornerRadius::same(6))
+            .inner_margin(egui::Margin::same(18));
+
+        ctrl_frame.show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.strong(RichText::new("System Hardware Configuration").size(14.5));
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        render_badge(ui, &format!("{} Rayon Threads", rayon::current_num_threads()), colors::BG_ELEVATED, colors::ACCENT_CYAN);
+                        render_badge(ui, &self.gpu_adapter_name, colors::BG_ELEVATED, colors::TEXT_PRIMARY);
+                        if self.gpu_supports_bc {
+                            render_badge(ui, "BC Hardware Textures", Color32::from_rgb(16, 40, 25), colors::ACCENT_GREEN);
+                        } else {
+                            render_badge(ui, "CPU Fallback", Color32::from_rgb(45, 38, 15), colors::TEXT_MUTED);
+                        }
+                    });
+                });
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if self.bench_is_running {
+                        let cancel_btn = egui::Button::new(RichText::new("Cancel Benchmark").size(14.0).strong().color(colors::ACCENT_RED))
+                            .min_size(Vec2::new(150.0, 36.0));
+                        if ui.add(cancel_btn).clicked() {
+                            if let Some(ref cancel) = self.bench_cancel {
+                                cancel.store(true, Ordering::Relaxed);
+                            }
+                            self.bench_is_running = false;
+                            self.bench_current_test = None;
+                            self.log("Benchmark cancelled by user.");
+                        }
+                    } else {
+                        let run_btn = egui::Button::new(RichText::new("Run Benchmark Suite").size(14.0).strong())
+                            .min_size(Vec2::new(170.0, 36.0))
+                            .fill(colors::ACCENT_BLUE)
+                            .corner_radius(CornerRadius::same(6));
+
+                        if ui.add(run_btn).clicked() {
+                            let cancel_flag = Arc::new(AtomicBool::new(false));
+                            let (tx, rx) = crossbeam_channel::unbounded();
+                            self.bench_cancel = Some(cancel_flag.clone());
+                            self.bench_rx = Some(rx);
+                            self.bench_is_running = true;
+                            self.bench_scores.clear();
+                            self.bench_current_test = Some("Initializing benchmark...".to_string());
+                            self.bench_current_step = 0;
+                            self.bench_total_steps = 1;
+                            self.bench_current_fps = 0.0;
+                            self.log("Hardware benchmark suite initiated.");
+                            spawn_benchmark_worker(cancel_flag, tx);
+                        }
+                    }
+
+                    if !self.bench_scores.is_empty() && !self.bench_is_running {
+                        if ui.add(egui::Button::new("Clear Results").min_size(Vec2::new(100.0, 36.0))).clicked() {
+                            self.bench_scores.clear();
+                        }
+                    }
+                });
+            });
+        });
+
+        // --- ACTIVE TEST PROGRESS CARD ---
+        if self.bench_is_running {
+            ui.add_space(12.0);
+            let prog_frame = egui::Frame::canvas(ui.style())
+                .fill(colors::BG_CARD)
+                .stroke(Stroke::new(1.0, colors::ACCENT_CYAN))
+                .corner_radius(CornerRadius::same(6))
+                .inner_margin(egui::Margin::same(18));
+
+            prog_frame.show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let test_title = self.bench_current_test.as_deref().unwrap_or("Running test...");
+                    ui.strong(RichText::new(test_title).size(15.0).color(colors::ACCENT_CYAN));
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if self.bench_current_fps > 0.0 {
+                            ui.label(RichText::new(format!("{:.1} FPS", self.bench_current_fps)).size(15.0).color(colors::ACCENT_GREEN).strong());
+                        }
+                    });
+                });
+
+                ui.add_space(8.0);
+
+                let progress = if self.bench_total_steps > 0 {
+                    (self.bench_current_step as f32 / self.bench_total_steps as f32).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                ui.add(egui::ProgressBar::new(progress).show_percentage());
+
+                ui.add_space(4.0);
+                ui.label(RichText::new(format!("Progress: {} of {} frames processed", self.bench_current_step, self.bench_total_steps)).color(colors::TEXT_FAINT));
+            });
+        }
+
+        ui.add_space(14.0);
+
+        // --- RESULTS SCORECARD CARD ---
+        let results_frame = egui::Frame::canvas(ui.style())
+            .fill(colors::BG_CARD)
+            .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
+            .corner_radius(CornerRadius::same(6))
+            .inner_margin(egui::Margin::same(18));
+
+        results_frame.show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.strong(RichText::new("Benchmark Scorecard & Hardware Capability").size(15.0));
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if !self.bench_scores.is_empty() {
+                        if ui.add(egui::Button::new("Copy Results (Markdown)").min_size(Vec2::new(160.0, 30.0))).clicked() {
+                            let mut md = String::from("| Benchmark Test | Resolution | Speed (FPS) | Latency (ms) | Throughput (GB/s) | Rating |\n|---|---|---|---|---|---|\n");
+                            for s in &self.bench_scores {
+                                md.push_str(&format!("| {} | {} | {:.1} | {:.2} ms | {:.2} GB/s | {} |\n", s.test_name, s.resolution, s.fps, s.frame_time_ms, s.bandwidth_gbps, s.performance_rating));
+                            }
+                            ui.copy_text(md);
+                            self.notify("Benchmark scorecard copied to clipboard.", colors::ACCENT_CYAN);
+                        }
+                    }
+                });
+            });
+
+            ui.add_space(10.0);
+
+            if self.bench_scores.is_empty() && !self.bench_is_running {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(16.0);
+                    ui.label(RichText::new("No benchmark data recorded yet.").color(colors::TEXT_MUTED).size(14.0));
+                    ui.label(RichText::new("Click 'Run Benchmark Suite' above to evaluate your CPU decoding and encoding performance.").color(colors::TEXT_FAINT));
+                    ui.add_space(16.0);
+                });
+            } else {
+                egui::Grid::new("bench_scorecard_grid")
+                    .striped(true)
+                    .spacing([24.0, 10.0])
+                    .show(ui, |ui| {
+                        // Table Headers
+                        ui.label(RichText::new("Benchmark Test").strong().color(colors::TEXT_PRIMARY));
+                        ui.label(RichText::new("Resolution").strong().color(colors::TEXT_PRIMARY));
+                        ui.label(RichText::new("Throughput (FPS)").strong().color(colors::TEXT_PRIMARY));
+                        ui.label(RichText::new("Frame Latency").strong().color(colors::TEXT_PRIMARY));
+                        ui.label(RichText::new("Bandwidth").strong().color(colors::TEXT_PRIMARY));
+                        ui.label(RichText::new("Production Capability").strong().color(colors::TEXT_PRIMARY));
+                        ui.end_row();
+
+                        for score in &self.bench_scores {
+                            ui.label(RichText::new(&score.test_name).strong());
+                            ui.label(RichText::new(&score.resolution).color(colors::TEXT_MUTED))
+                                .on_hover_text(format!("{} frames measured in {:.2}s", score.frame_count, score.elapsed_secs));
+
+                            let fps_color = if score.fps >= 120.0 {
+                                colors::ACCENT_GREEN
+                            } else if score.fps >= 60.0 {
+                                colors::ACCENT_CYAN
+                            } else if score.fps >= 30.0 {
+                                colors::ACCENT_AMBER
+                            } else {
+                                colors::ACCENT_RED
+                            };
+                            ui.label(RichText::new(format!("{:.1} FPS", score.fps)).color(fps_color).strong());
+
+                            ui.label(format!("{:.2} ms", score.frame_time_ms));
+                            ui.label(format!("{:.2} GB/s", score.bandwidth_gbps));
+
+                            render_badge(ui, score.performance_rating, colors::BG_ELEVATED, colors::ACCENT_GREEN);
+                            ui.end_row();
+                        }
+                    });
+            }
+        });
+
+        ui.add_space(14.0);
+
+        // --- HARDWARE REFERENCE GUIDE CARD ---
+        let guide_frame = egui::Frame::canvas(ui.style())
+            .fill(colors::BG_CARD)
+            .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
+            .corner_radius(CornerRadius::same(6))
+            .inner_margin(egui::Margin::same(18));
+
+        guide_frame.show(ui, |ui| {
+            ui.strong(RichText::new("Media Server Performance Thresholds & Guidelines").size(14.5));
+            ui.add_space(8.0);
+            ui.label(RichText::new("• 1080p60 Real-Time: Requires frame decode time <= 16.6 ms (>= 60 FPS). Hap 1 / Hap Q typically achieves 300-800 FPS on modern multi-core CPUs.").color(colors::TEXT_MUTED));
+            ui.add_space(4.0);
+            ui.label(RichText::new("• 4K UHD 60FPS: Requires frame decode time <= 16.6 ms. Multi-chunk encoding (4 to 8 chunks) is essential to utilize all CPU threads in parallel.").color(colors::TEXT_MUTED));
+            ui.add_space(4.0);
+            ui.label(RichText::new("• 4K UHD 120FPS / Multi-Head: Requires frame decode time <= 8.3 ms (>= 120 FPS). Essential for ultra-smooth LED wall rendering and XR virtual production stages.").color(colors::TEXT_MUTED));
+            ui.add_space(4.0);
+            ui.label(RichText::new("• Real-Time Fast Ingest: Draft quality preset allows 60+ FPS live sequence encoding for instant turnaround in studio workflows.").color(colors::TEXT_MUTED));
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TAB 4: DIAGNOSTICS & SYSTEM
 // ---------------------------------------------------------------------------
 impl HapLabApp {
     fn show_diagnostics_tab(&mut self, ui: &mut egui::Ui) {
         ui.heading(RichText::new("System & Diagnostics").size(19.0));
-        ui.label(RichText::new("GPU capabilities, threading, and runtime event log.").color(colors::TEXT_MUTED));
+        ui.label(RichText::new("GPU capabilities, file associations, threading, and runtime event log.").color(colors::TEXT_MUTED));
         ui.add_space(10.0);
 
         let diag_frame = egui::Frame::canvas(ui.style())
@@ -1568,6 +2110,56 @@ impl HapLabApp {
                 ui.label(format!("{} threads (Rayon)", rayon::current_num_threads()));
                 ui.end_row();
             });
+        });
+
+        // Windows File Integration Card
+        ui.add_space(14.0);
+        let assoc_frame = egui::Frame::canvas(ui.style())
+            .fill(colors::BG_CARD)
+            .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
+            .corner_radius(CornerRadius::same(6))
+            .inner_margin(egui::Margin::same(18));
+
+        assoc_frame.show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.strong(RichText::new("Windows File Integration & Default Associations").size(15.0));
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    render_badge(ui, "QuickTime .MOV Handler", colors::BG_ELEVATED, colors::ACCENT_CYAN);
+                });
+            });
+
+            ui.add_space(8.0);
+            ui.label(RichText::new(
+                "Register HapLab with Windows Explorer to automatically open .MOV files and enable seamless playback and inspection."
+            ).color(colors::TEXT_MUTED));
+
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.add(egui::Button::new(RichText::new("Associate .MOV with HapLab").strong().color(colors::ACCENT_CYAN)).min_size(Vec2::new(210.0, 36.0))).clicked() {
+                    match register_mov_association() {
+                        Ok(msg) => {
+                            self.log(&msg);
+                            self.notify(msg, colors::ACCENT_GREEN);
+                        }
+                        Err(err) => {
+                            let err_msg = format!("File association error: {}", err);
+                            self.log(&err_msg);
+                            self.notify(err_msg, colors::ACCENT_RED);
+                        }
+                    }
+                }
+
+                if ui.add(egui::Button::new("Open Windows Default Apps Settings").min_size(Vec2::new(240.0, 36.0))).clicked() {
+                    open_windows_default_apps();
+                    self.log("Opened Windows Default Apps configuration page.");
+                }
+            });
+
+            ui.add_space(6.0);
+            ui.label(RichText::new(
+                "Note: On Windows 10 and 11, Microsoft requires user confirmation in the Default Apps control panel. Clicking 'Associate .MOV with HapLab' writes the registry handler, and 'Open Windows Default Apps Settings' allows you to select HapLab as the default player."
+            ).color(colors::TEXT_FAINT).size(11.5));
         });
 
         ui.add_space(14.0);

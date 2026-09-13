@@ -21,6 +21,7 @@ pub mod dxt;
 pub mod encoder;
 pub mod format;
 pub mod header;
+pub mod inspector;
 pub mod mov;
 pub mod snappy;
 pub mod ycocg;
@@ -30,6 +31,7 @@ pub use decoder::{decode_frame_to_rgba, decode_frame_to_texture, DecodeError, Ra
 pub use encoder::{encode_frame, encode_frame_with_options, EncodeError};
 pub use format::HapFormat;
 pub use header::{ChunkInfo, DecodeInstructions, SectionHeader};
+pub use inspector::{audit_hap_stream, extract_stream_summary, FaultSeverity, StreamAudit, StreamFault, StreamSummary};
 pub use mov::{FrameSample, MovReaderError, MovWriterError, QtHapReader, QtHapWriter, VideoConfig};
 
 #[cfg(test)]

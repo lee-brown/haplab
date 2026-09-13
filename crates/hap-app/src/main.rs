@@ -3,8 +3,10 @@
 //! A pure Rust desktop GUI and CLI tool for encoding, decoding, and inspecting HAP video streams.
 //! Built by Lee Brown. Licensed under the MIT License.
 
+mod benchmark;
 mod cli;
 mod gui;
+mod platform;
 mod worker;
 
 use clap::Parser;
