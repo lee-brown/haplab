@@ -11,7 +11,9 @@ use crossbeam_channel::Receiver;
 use eframe::egui::{
     self, Color32, CornerRadius, Rect, RichText, Stroke, TextureOptions, Vec2,
 };
-use hap_core::{decode_frame_to_rgba, HapFormat, QtHapReader};
+use hap_core::{
+    decode_frame_to_rgba, AlphaMode, ColorRange, DitherMode, HapFormat, QualityPreset, QtHapReader,
+};
 use image::GenericImageView;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -109,6 +111,10 @@ pub struct HapStudioApp {
     enc_fps: f32,
     enc_chunks: usize,
     enc_snappy: bool,
+    enc_color_range: ColorRange,
+    enc_alpha_mode: AlphaMode,
+    enc_dither_mode: DitherMode,
+    enc_quality: QualityPreset,
     enc_start_time: Option<Instant>,
     enc_rx: Option<Receiver<WorkerProgress>>,
     enc_cancel: Option<Arc<AtomicBool>>,
@@ -177,6 +183,10 @@ impl Default for HapStudioApp {
             enc_fps: 30.0,
             enc_chunks: 4,
             enc_snappy: true,
+            enc_color_range: ColorRange::Full,
+            enc_alpha_mode: AlphaMode::Straight,
+            enc_dither_mode: DitherMode::None,
+            enc_quality: QualityPreset::Production,
             enc_start_time: None,
             enc_rx: None,
             enc_cancel: None,
@@ -225,26 +235,46 @@ impl HapStudioApp {
                 self.enc_format = HapFormat::HapY;
                 self.enc_chunks = 4;
                 self.enc_snappy = true;
+                self.enc_color_range = ColorRange::Full;
+                self.enc_alpha_mode = AlphaMode::Straight;
+                self.enc_dither_mode = DitherMode::None;
+                self.enc_quality = QualityPreset::Production;
             }
             EncoderPreset::HapRUltra => {
                 self.enc_format = HapFormat::Hap7;
                 self.enc_chunks = 8;
                 self.enc_snappy = true;
+                self.enc_color_range = ColorRange::Full;
+                self.enc_alpha_mode = AlphaMode::Straight;
+                self.enc_dither_mode = DitherMode::None;
+                self.enc_quality = QualityPreset::Production;
             }
             EncoderPreset::HapQAlphaTransparent => {
                 self.enc_format = HapFormat::HapM;
                 self.enc_chunks = 4;
                 self.enc_snappy = true;
+                self.enc_color_range = ColorRange::Full;
+                self.enc_alpha_mode = AlphaMode::Straight;
+                self.enc_dither_mode = DitherMode::None;
+                self.enc_quality = QualityPreset::Production;
             }
             EncoderPreset::Hap1Fast => {
                 self.enc_format = HapFormat::Hap1;
                 self.enc_chunks = 4;
                 self.enc_snappy = false;
+                self.enc_color_range = ColorRange::Full;
+                self.enc_alpha_mode = AlphaMode::Discard;
+                self.enc_dither_mode = DitherMode::None;
+                self.enc_quality = QualityPreset::Draft;
             }
             EncoderPreset::HapAlphaLight => {
                 self.enc_format = HapFormat::Hap5;
                 self.enc_chunks = 4;
                 self.enc_snappy = true;
+                self.enc_color_range = ColorRange::Full;
+                self.enc_alpha_mode = AlphaMode::Straight;
+                self.enc_dither_mode = DitherMode::None;
+                self.enc_quality = QualityPreset::Production;
             }
             EncoderPreset::Custom => {}
         }
@@ -1289,6 +1319,97 @@ impl HapStudioApp {
             });
         });
 
+        ui.add_space(14.0);
+
+        // --- COLOR & PROCESSING SETTINGS CARD ---
+        let color_frame = egui::Frame::canvas(ui.style())
+            .fill(colors::BG_CARD)
+            .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
+            .corner_radius(CornerRadius::same(6))
+            .inner_margin(egui::Margin::same(18));
+
+        color_frame.show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.strong(RichText::new("Color & Processing Settings").size(15.0));
+                ui.label(RichText::new("Professional levels, alpha transparency, and dithering controls.").color(colors::TEXT_MUTED).size(12.0));
+            });
+            ui.add_space(10.0);
+
+            egui::Grid::new("enc_color_grid").spacing([32.0, 14.0]).show(ui, |ui| {
+                ui.label(RichText::new("Color Levels:").color(colors::TEXT_MUTED));
+                egui::ComboBox::from_id_salt("color_range_combo")
+                    .selected_text(match self.enc_color_range {
+                        ColorRange::Full => "Full Range (0–255 PC / Graphics)",
+                        ColorRange::Limited => "Limited Range (16–235 Studio Video -> Expand)",
+                    })
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_value(&mut self.enc_color_range, ColorRange::Full, "Full Range (0–255 PC / Graphics / Unreal)").clicked() {
+                            self.enc_preset = EncoderPreset::Custom;
+                        }
+                        if ui.selectable_value(&mut self.enc_color_range, ColorRange::Limited, "Limited Range (16–235 Studio Video -> Expand to 0–255)").clicked() {
+                            self.enc_preset = EncoderPreset::Custom;
+                        }
+                    });
+                ui.end_row();
+
+                ui.label(RichText::new("Alpha Channel:").color(colors::TEXT_MUTED));
+                egui::ComboBox::from_id_salt("alpha_mode_combo")
+                    .selected_text(match self.enc_alpha_mode {
+                        AlphaMode::Straight => "Straight (Unassociated, As-Is)",
+                        AlphaMode::Premultiply => "Premultiply (RGB × Alpha, Shader-ready)",
+                        AlphaMode::Demultiply => "Demultiply (Strip black fringes)",
+                        AlphaMode::Discard => "Discard Alpha (Force Opaque)",
+                    })
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_value(&mut self.enc_alpha_mode, AlphaMode::Straight, "Straight (Unassociated, Keep As-Is)").clicked() {
+                            self.enc_preset = EncoderPreset::Custom;
+                        }
+                        if ui.selectable_value(&mut self.enc_alpha_mode, AlphaMode::Premultiply, "Premultiply (RGB × Alpha, Fixes live blending halos)").clicked() {
+                            self.enc_preset = EncoderPreset::Custom;
+                        }
+                        if ui.selectable_value(&mut self.enc_alpha_mode, AlphaMode::Demultiply, "Demultiply (Un-premultiply, Removes existing dark halos)").clicked() {
+                            self.enc_preset = EncoderPreset::Custom;
+                        }
+                        if ui.selectable_value(&mut self.enc_alpha_mode, AlphaMode::Discard, "Discard Alpha (Force completely opaque)").clicked() {
+                            self.enc_preset = EncoderPreset::Custom;
+                        }
+                    });
+                ui.end_row();
+
+                ui.label(RichText::new("Chroma Dither:").color(colors::TEXT_MUTED));
+                egui::ComboBox::from_id_salt("dither_mode_combo")
+                    .selected_text(match self.enc_dither_mode {
+                        DitherMode::None => "None (Fastest)",
+                        DitherMode::Bayer4x4 => "Bayer 4×4 Spatial (Mitigates banding on LED walls)",
+                    })
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_value(&mut self.enc_dither_mode, DitherMode::None, "None (Fastest)").clicked() {
+                            self.enc_preset = EncoderPreset::Custom;
+                        }
+                        if ui.selectable_value(&mut self.enc_dither_mode, DitherMode::Bayer4x4, "Bayer 4×4 Spatial (Eliminates step banding on LED walls / Projectors)").clicked() {
+                            self.enc_preset = EncoderPreset::Custom;
+                        }
+                    });
+                ui.end_row();
+
+                ui.label(RichText::new("Quality Preset:").color(colors::TEXT_MUTED));
+                egui::ComboBox::from_id_salt("quality_combo")
+                    .selected_text(match self.enc_quality {
+                        QualityPreset::Production => "Production Master (ClusterFit, Best Quality)",
+                        QualityPreset::Draft => "Draft / Rush (RangeFit, ~3x Faster)",
+                    })
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_value(&mut self.enc_quality, QualityPreset::Production, "Production Master (ClusterFit, Optimal RMS error)").clicked() {
+                            self.enc_preset = EncoderPreset::Custom;
+                        }
+                        if ui.selectable_value(&mut self.enc_quality, QualityPreset::Draft, "Draft / Rush (RangeFit, Real-time fast ingest)").clicked() {
+                            self.enc_preset = EncoderPreset::Custom;
+                        }
+                    });
+                ui.end_row();
+            });
+        });
+
         ui.add_space(16.0);
 
         // --- ENCODE ACTIONS ---
@@ -1318,6 +1439,10 @@ impl HapStudioApp {
                         fps: self.enc_fps,
                         chunks: self.enc_chunks,
                         snappy: self.enc_snappy,
+                        color_range: self.enc_color_range,
+                        alpha_mode: self.enc_alpha_mode,
+                        dither_mode: self.enc_dither_mode,
+                        quality: self.enc_quality,
                     };
 
                     self.log(&format!("Started encode: {:?} -> {:?}", in_p, out_p));

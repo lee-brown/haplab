@@ -47,13 +47,21 @@ use rayon::prelude::*;
 /// In the output buffer:
 /// - Channel R stores scaled Co
 /// - Channel G stores scaled Cg
-/// - Channel B stores the scale indicator `(scale - 1) * 8`
-/// - Channel A stores Luma Y (which DXT5 encodes in its high-precision 8-bit alpha block)
-pub fn rgba_to_scaled_ycocg_dxt5_input(
+const BAYER_4X4: [[i32; 4]; 4] = [
+    [ 0,  8,  2, 10],
+    [12,  4, 14,  6],
+    [ 3, 11,  1,  9],
+    [15,  7, 13,  5],
+];
+
+/// Transform an RGBA8 buffer to the scaled YCoCg layout ready for DXT5 compression,
+/// with optional Bayer spatial dithering to prevent color banding on large displays.
+pub fn rgba_to_scaled_ycocg_dxt5_input_with_dither(
     rgba: &[u8],
     width: usize,
     height: usize,
     out: &mut [u8],
+    enable_dither: bool,
 ) {
     assert_eq!(rgba.len(), width * height * 4);
     assert_eq!(out.len(), width * height * 4);
@@ -108,8 +116,14 @@ pub fn rgba_to_scaled_ycocg_dxt5_input(
 
                     for px in 0..4 {
                         let pi = py * 4 + px;
-                        let co_scaled = ((co_diffs[pi] << scale_shift) + 128).clamp(0, 255) as u8;
-                        let cg_scaled = ((cg_diffs[pi] << scale_shift) + 128).clamp(0, 255) as u8;
+                        let dither = if enable_dither {
+                            (BAYER_4X4[py][px] * 2 - 15) / 8
+                        } else {
+                            0
+                        };
+
+                        let co_scaled = ((co_diffs[pi] << scale_shift) + 128 + dither).clamp(0, 255) as u8;
+                        let cg_scaled = ((cg_diffs[pi] << scale_shift) + 128 + dither).clamp(0, 255) as u8;
 
                         let di = px * 4;
                         dst_slice[di] = co_scaled;
@@ -120,6 +134,20 @@ pub fn rgba_to_scaled_ycocg_dxt5_input(
                 }
             }
         });
+}
+
+/// Transform an RGBA8 buffer to the scaled YCoCg layout ready for DXT5 compression.
+/// - Channel R stores scaled Co
+/// - Channel G stores scaled Cg
+/// - Channel B stores the scale indicator `(scale - 1) * 8`
+/// - Channel A stores Luma Y (which DXT5 encodes in its high-precision 8-bit alpha block)
+pub fn rgba_to_scaled_ycocg_dxt5_input(
+    rgba: &[u8],
+    width: usize,
+    height: usize,
+    out: &mut [u8],
+) {
+    rgba_to_scaled_ycocg_dxt5_input_with_dither(rgba, width, height, out, false);
 }
 
 /// Transform a decompressed DXT5 buffer (containing scaled YCoCg in RGBA) back to standard RGBA8.

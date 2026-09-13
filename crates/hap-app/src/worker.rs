@@ -1,7 +1,10 @@
 //! Background thread workers for responsive GUI progress reporting.
 
 use crossbeam_channel::Sender;
-use hap_core::{decode_frame_to_rgba, encode_frame, HapFormat, QtHapReader, QtHapWriter, VideoConfig};
+use hap_core::{
+    decode_frame_to_rgba, encode_frame_with_options, AlphaMode, ColorRange, DitherMode,
+    EncodeOptions, HapFormat, QualityPreset, QtHapReader, QtHapWriter, VideoConfig,
+};
 use image::GenericImageView;
 use std::fs;
 use std::path::PathBuf;
@@ -24,6 +27,10 @@ pub struct EncodeJobConfig {
     pub fps: f32,
     pub chunks: usize,
     pub snappy: bool,
+    pub color_range: ColorRange,
+    pub alpha_mode: AlphaMode,
+    pub dither_mode: DitherMode,
+    pub quality: QualityPreset,
 }
 
 pub fn spawn_encode_worker(
@@ -100,7 +107,16 @@ pub fn spawn_encode_worker(
             };
 
             let raw = img.into_raw();
-            let packet = match encode_frame(&raw, width as usize, height as usize, config.format, config.chunks, config.snappy) {
+            let options = EncodeOptions {
+                format: config.format,
+                chunk_count: config.chunks,
+                use_snappy: config.snappy,
+                color_range: config.color_range,
+                alpha_mode: config.alpha_mode,
+                dither_mode: config.dither_mode,
+                quality: config.quality,
+            };
+            let packet = match encode_frame_with_options(&raw, width as usize, height as usize, &options) {
                 Ok(pkt) => pkt,
                 Err(e) => {
                     let _ = progress_tx.send(WorkerProgress::Error(format!("Encode error on frame {}: {}", i, e)));

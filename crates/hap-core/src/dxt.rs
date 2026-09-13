@@ -12,8 +12,13 @@ pub enum DxtError {
     BufferSizeMismatch { expected: usize, actual: usize },
 }
 
-/// Compress an RGBA8 buffer to DXT1 / BC1.
-pub fn compress_bc1(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>, DxtError> {
+/// Compress an RGBA8 buffer to DXT1 / BC1 using custom compression parameters.
+pub fn compress_bc1_with_params(
+    rgba: &[u8],
+    width: usize,
+    height: usize,
+    params: texpresso::Params,
+) -> Result<Vec<u8>, DxtError> {
     if width % 4 != 0 || height % 4 != 0 {
         return Err(DxtError::InvalidDimensions { width, height });
     }
@@ -27,8 +32,13 @@ pub fn compress_bc1(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>,
     let fmt = texpresso::Format::Bc1;
     let compressed_len = fmt.compressed_size(width, height);
     let mut out = vec![0u8; compressed_len];
-    fmt.compress(rgba, width, height, texpresso::Params::default(), &mut out);
+    fmt.compress(rgba, width, height, params, &mut out);
     Ok(out)
+}
+
+/// Compress an RGBA8 buffer to DXT1 / BC1 with default parameters.
+pub fn compress_bc1(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>, DxtError> {
+    compress_bc1_with_params(rgba, width, height, texpresso::Params::default())
 }
 
 use rayon::prelude::*;
@@ -65,8 +75,13 @@ pub fn decompress_bc1(bc1: &[u8], width: usize, height: usize) -> Result<Vec<u8>
     Ok(out)
 }
 
-/// Compress an RGBA8 buffer to DXT5 / BC3.
-pub fn compress_bc3(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>, DxtError> {
+/// Compress an RGBA8 buffer to DXT5 / BC3 using custom compression parameters.
+pub fn compress_bc3_with_params(
+    rgba: &[u8],
+    width: usize,
+    height: usize,
+    params: texpresso::Params,
+) -> Result<Vec<u8>, DxtError> {
     if width % 4 != 0 || height % 4 != 0 {
         return Err(DxtError::InvalidDimensions { width, height });
     }
@@ -80,8 +95,13 @@ pub fn compress_bc3(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>,
     let fmt = texpresso::Format::Bc3;
     let compressed_len = fmt.compressed_size(width, height);
     let mut out = vec![0u8; compressed_len];
-    fmt.compress(rgba, width, height, texpresso::Params::default(), &mut out);
+    fmt.compress(rgba, width, height, params, &mut out);
     Ok(out)
+}
+
+/// Compress an RGBA8 buffer to DXT5 / BC3 with default parameters.
+pub fn compress_bc3(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>, DxtError> {
+    compress_bc3_with_params(rgba, width, height, texpresso::Params::default())
 }
 
 /// Decompress DXT5 / BC3 to RGBA8 in parallel across block rows using bcdec_rs.

@@ -18,9 +18,14 @@ pub enum Bc7Error {
 /// 4-bit interpolation weights for BC7 mode 6 (out of 64).
 const WEIGHTS4: [u32; 16] = [0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64];
 
-/// Compress an RGBA8 image buffer (dimensions multiple of 4) to BC7 Mode 6.
+/// Compress an RGBA8 image buffer (dimensions multiple of 4) to BC7 Mode 6 with specified refinement iterations.
 /// Output is 16 bytes per 4x4 block.
-pub fn compress_bc7(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>, Bc7Error> {
+pub fn compress_bc7_with_refinement(
+    rgba: &[u8],
+    width: usize,
+    height: usize,
+    refine_iters: u32,
+) -> Result<Vec<u8>, Bc7Error> {
     if width % 4 != 0 || height % 4 != 0 {
         return Err(Bc7Error::InvalidDimensions { width, height });
     }
@@ -52,13 +57,18 @@ pub fn compress_bc7(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>,
                     px[i].copy_from_slice(&rgba[idx..idx + 4]);
                 }
 
-                let block = encode_bc7_block_mode6(&px, 2);
+                let block = encode_bc7_block_mode6(&px, refine_iters);
                 let block_offset = bx * 16;
                 out_row[block_offset..block_offset + 16].copy_from_slice(&block);
             }
         });
 
     Ok(out)
+}
+
+/// Compress an RGBA8 image buffer (dimensions multiple of 4) to BC7 Mode 6 with default refinement.
+pub fn compress_bc7(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>, Bc7Error> {
+    compress_bc7_with_refinement(rgba, width, height, 2)
 }
 
 /// Decompress BC7 blocks into RGBA8 pixels in parallel across block rows using bcdec_rs.

@@ -2,7 +2,8 @@
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use hap_core::{
-    decode_frame_to_rgba, encode_frame, HapFormat, QtHapReader, QtHapWriter, VideoConfig,
+    decode_frame_to_rgba, encode_frame_with_options, AlphaMode, ColorRange, DitherMode,
+    EncodeOptions, HapFormat, QualityPreset, QtHapReader, QtHapWriter, VideoConfig,
 };
 use hap_gpu::GpuCompressor;
 use image::GenericImageView;
@@ -55,6 +56,80 @@ impl From<CliHapFormat> for HapFormat {
     }
 }
 
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CliColorRange {
+    /// Full PC / Graphics levels 0..=255
+    Full,
+    /// Limited / Studio broadcast levels 16..=235 (expands to 0..=255)
+    Limited,
+}
+
+impl From<CliColorRange> for ColorRange {
+    fn from(c: CliColorRange) -> Self {
+        match c {
+            CliColorRange::Full => ColorRange::Full,
+            CliColorRange::Limited => ColorRange::Limited,
+        }
+    }
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CliAlphaMode {
+    /// Straight (unassociated) alpha
+    Straight,
+    /// Premultiply alpha: RGB = (RGB * Alpha) / 255
+    Premultiply,
+    /// Demultiply (un-premultiply) alpha: RGB = (RGB * 255) / Alpha
+    Demultiply,
+    /// Discard alpha channel (force opaque 255)
+    Discard,
+}
+
+impl From<CliAlphaMode> for AlphaMode {
+    fn from(a: CliAlphaMode) -> Self {
+        match a {
+            CliAlphaMode::Straight => AlphaMode::Straight,
+            CliAlphaMode::Premultiply => AlphaMode::Premultiply,
+            CliAlphaMode::Demultiply => AlphaMode::Demultiply,
+            CliAlphaMode::Discard => AlphaMode::Discard,
+        }
+    }
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CliDitherMode {
+    /// No dithering
+    None,
+    /// Bayer 4x4 spatial ordered dithering (reduces banding on LED walls)
+    Bayer,
+}
+
+impl From<CliDitherMode> for DitherMode {
+    fn from(d: CliDitherMode) -> Self {
+        match d {
+            CliDitherMode::None => DitherMode::None,
+            CliDitherMode::Bayer => DitherMode::Bayer4x4,
+        }
+    }
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CliQualityPreset {
+    /// Draft / Fast (RangeFit - ~3x faster encode)
+    Draft,
+    /// Production (ClusterFit - optimal endpoint clustering)
+    Production,
+}
+
+impl From<CliQualityPreset> for QualityPreset {
+    fn from(q: CliQualityPreset) -> Self {
+        match q {
+            CliQualityPreset::Draft => QualityPreset::Draft,
+            CliQualityPreset::Production => QualityPreset::Production,
+        }
+    }
+}
+
 #[derive(Args, Debug)]
 pub struct EncodeArgs {
     /// Path to directory containing image sequence, or file pattern
@@ -80,6 +155,22 @@ pub struct EncodeArgs {
     /// Apply Snappy second-stage compression
     #[arg(long, default_value_t = true)]
     pub snappy: bool,
+
+    /// Input color range: full (0-255), limited (16-235 video levels)
+    #[arg(long, value_enum, default_value_t = CliColorRange::Full)]
+    pub color_range: CliColorRange,
+
+    /// Alpha channel handling: straight, premultiply, demultiply, discard
+    #[arg(long, value_enum, default_value_t = CliAlphaMode::Straight)]
+    pub alpha_mode: CliAlphaMode,
+
+    /// Chroma dithering mode to eliminate color banding: none, bayer
+    #[arg(long, value_enum, default_value_t = CliDitherMode::None)]
+    pub dither: CliDitherMode,
+
+    /// Encoding quality vs speed: draft (ultra-fast RangeFit), production (ClusterFit)
+    #[arg(long, value_enum, default_value_t = CliQualityPreset::Production)]
+    pub quality: CliQualityPreset,
 
     /// Enable GPU hardware acceleration via wgpu
     #[arg(long, default_value_t = false)]
@@ -165,14 +256,28 @@ fn run_encode(args: EncodeArgs) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let hap_format: HapFormat = args.format.into();
+    let encode_opts = EncodeOptions {
+        format: hap_format,
+        chunk_count: args.chunks,
+        use_snappy: args.snappy,
+        color_range: args.color_range.into(),
+        alpha_mode: args.alpha_mode.into(),
+        dither_mode: args.dither.into(),
+        quality: args.quality.into(),
+    };
+
     println!(
-        "Encoding settings: Format={}, Resolution={}x{}, FPS={:.2}, Chunks={}, Snappy={}, GPU={}",
+        "Encoding settings: Format={}, Res={}x{}, FPS={:.2}, Chunks={}, Snappy={}, Range={:?}, Alpha={:?}, Dither={:?}, Quality={:?}, GPU={}",
         hap_format.name(),
         width,
         height,
         args.fps,
         args.chunks,
         args.snappy,
+        args.color_range,
+        args.alpha_mode,
+        args.dither,
+        args.quality,
         args.gpu
     );
 
@@ -246,10 +351,10 @@ fn run_encode(args: EncodeArgs) -> Result<(), Box<dyn std::error::Error>> {
                     pkt
                 }
             } else {
-                encode_frame(&raw_rgba, width as usize, height as usize, hap_format, args.chunks, args.snappy)?
+                encode_frame_with_options(&raw_rgba, width as usize, height as usize, &encode_opts)?
             }
         } else {
-            encode_frame(&raw_rgba, width as usize, height as usize, hap_format, args.chunks, args.snappy)?
+            encode_frame_with_options(&raw_rgba, width as usize, height as usize, &encode_opts)?
         };
 
         writer.write_frame(&packet)?;

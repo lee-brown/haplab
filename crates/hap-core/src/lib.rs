@@ -15,6 +15,7 @@
 
 pub mod bc6h;
 pub mod bc7;
+pub mod color;
 pub mod decoder;
 pub mod dxt;
 pub mod encoder;
@@ -24,8 +25,9 @@ pub mod mov;
 pub mod snappy;
 pub mod ycocg;
 
+pub use color::{preprocess_rgba, AlphaMode, ColorRange, DitherMode, EncodeOptions, QualityPreset};
 pub use decoder::{decode_frame_to_rgba, decode_frame_to_texture, DecodeError, RawTextureFrame};
-pub use encoder::{encode_frame, EncodeError};
+pub use encoder::{encode_frame, encode_frame_with_options, EncodeError};
 pub use format::HapFormat;
 pub use header::{ChunkInfo, DecodeInstructions, SectionHeader};
 pub use mov::{FrameSample, MovReaderError, MovWriterError, QtHapReader, QtHapWriter, VideoConfig};
@@ -133,6 +135,44 @@ mod tests {
             let packet = reader.read_frame_packet(i).unwrap();
             let decoded = decode_frame_to_rgba(&packet, w, h).unwrap();
             assert_eq!(decoded.len(), rgba.len());
+        }
+    }
+
+    #[test]
+    fn test_encode_frame_with_professional_options() {
+        let (w, h) = (16, 16);
+        let rgba = generate_test_pattern(w, h, true);
+
+        // Test with Studio Limited range + Premultiplied Alpha + Bayer Dithering + Draft Quality
+        let opts = EncodeOptions {
+            format: HapFormat::HapY,
+            chunk_count: 2,
+            use_snappy: true,
+            color_range: ColorRange::Limited,
+            alpha_mode: AlphaMode::Premultiply,
+            dither_mode: DitherMode::Bayer4x4,
+            quality: QualityPreset::Draft,
+        };
+        let packet = encode_frame_with_options(&rgba, w, h, &opts).unwrap();
+        let decoded = decode_frame_to_rgba(&packet, w, h).unwrap();
+        assert_eq!(decoded.len(), rgba.len());
+
+        // Test with Hap 7 (BC7) + Production Quality + Discard Alpha
+        let opts_bc7 = EncodeOptions {
+            format: HapFormat::Hap7,
+            chunk_count: 1,
+            use_snappy: true,
+            color_range: ColorRange::Full,
+            alpha_mode: AlphaMode::Discard,
+            dither_mode: DitherMode::None,
+            quality: QualityPreset::Production,
+        };
+        let packet_bc7 = encode_frame_with_options(&rgba, w, h, &opts_bc7).unwrap();
+        let decoded_bc7 = decode_frame_to_rgba(&packet_bc7, w, h).unwrap();
+        assert_eq!(decoded_bc7.len(), rgba.len());
+        // Verify alpha was forced to 255
+        for p in decoded_bc7.chunks_exact(4) {
+            assert_eq!(p[3], 255);
         }
     }
 

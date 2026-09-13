@@ -3,8 +3,6 @@
 //! A pure Rust desktop GUI and CLI tool for encoding, decoding, and inspecting HAP video streams.
 //! Built by Lee Brown. Licensed under the MIT License.
 
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // Hide console window in release GUI mode on Windows
-
 mod cli;
 mod gui;
 mod worker;
@@ -19,20 +17,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args: Vec<String> = env::args().collect();
 
-    // If CLI arguments were provided, attach to parent console on Windows and execute headless mode
+    // If CLI arguments were provided, execute headless CLI mode
     if args.len() > 1 {
-        #[cfg(windows)]
-        unsafe {
-            extern "system" {
-                fn AttachConsole(dw_process_id: u32) -> i32;
-            }
-            const ATTACH_PARENT_PROCESS: u32 = 0xFFFF_FFFF;
-            let _ = AttachConsole(ATTACH_PARENT_PROCESS);
-        }
-
         let cli_args = cli::Cli::parse();
         cli::run_cli(cli_args)?;
         return Ok(());
+    }
+
+    // If launched without CLI arguments (e.g. double-clicked from File Explorer),
+    // detach from the Windows console immediately before launching the graphical window.
+    #[cfg(windows)]
+    unsafe {
+        extern "system" {
+            fn FreeConsole() -> i32;
+        }
+        let _ = FreeConsole();
     }
 
     // Otherwise, launch the full interactive graphical user interface
