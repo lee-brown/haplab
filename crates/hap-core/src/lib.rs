@@ -135,4 +135,26 @@ mod tests {
             assert_eq!(decoded.len(), rgba.len());
         }
     }
+
+    #[test]
+    fn test_benchmark_1080p_decode() {
+        let mov_path = std::path::Path::new(r"C:\Users\Lee Brown\.gemini\antigravity-cli\brain\0ca19e38-643b-49ec-b073-cf1600c37ab0\scratch\perf_test\perf_1080p_hapy.mov");
+        if !mov_path.exists() {
+            return;
+        }
+        let mut reader = QtHapReader::open(mov_path).unwrap();
+        let count = reader.frame_count();
+        let w = reader.width() as usize;
+        let h = reader.height() as usize;
+
+        let start = std::time::Instant::now();
+        for i in 0..count {
+            let pkt = reader.read_frame_packet(i).unwrap();
+            let rgba = decode_frame_to_rgba(&pkt, w, h).unwrap();
+            assert_eq!(rgba.len(), w * h * 4);
+        }
+        let elapsed = start.elapsed();
+        let fps = count as f64 / elapsed.as_secs_f64();
+        println!("\n>>> HAP-CORE 1080p IN-MEMORY DECODE: {} frames in {:.4}s = {:.1} FPS ({:.2} ms/frame) <<<\n", count, elapsed.as_secs_f64(), fps, (elapsed.as_secs_f64() * 1000.0) / count as f64);
+    }
 }
