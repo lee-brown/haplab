@@ -88,15 +88,28 @@ hap decode -i output_hapy.mov -o ./decoded_frames/
 
 ---
 
-## Desktop GUI
+## Desktop GUI (HAP Video Studio)
 
-When invoked without subcommands (or double-clicked in Windows Explorer / macOS Finder), `hap` launches the hardware-accelerated **HAP Studio Desktop App**:
+When invoked without subcommands (or double-clicked in Windows Explorer / macOS Finder), `hap` launches the hardware-accelerated **HAP Video Studio**:
 
-- 🎬 **Real-Time Video Player**: Smooth timeline scrubbing, play/pause controls, loop mode, and elapsed playback counters.
-- 🔍 **Live Frame Inspector**: Inspect texture formats, container headers, chunk counts, and resolution diagnostics.
-- 🎛️ **Format Transcoder**: Batch encode folders of image sequences to any HAP flavour with custom chunk counts, frame rates, and Snappy compression.
-- 💾 **Frame Exporter**: Export specific frame ranges or entire clips to PNG sequences.
-- 🛠 **GPU Hardware Monitor**: View active GPU adapter name, driver backend, and device limits.
+- 🎨 **Modern Dark Studio Theme**: Custom obsidian-slate palette with smooth corner radiuses, high contrast typography, and non-intrusive toast notifications.
+- 🎬 **Hero Drop Zone**: Seamless drag-and-drop with active glowing window border feedback. Drag a `.mov` to instantly play & inspect, or drag an image sequence folder to configure encoding.
+- 🎛️ **Pro Media Player & Timeline Scrubber**:
+  - Full keyboard shortcuts: `Space` (Play/Pause), `←`/`→` (±1 Frame), `Shift + ←`/`→` (±10 Frames), `Home`/`End` (Jump to Start/End), `L` (Toggle loop mode).
+  - Exact SMPTE timecode display (`HH:MM:SS:FF`) and frame percentage metrics.
+  - **Transparency Checkerboard**: Renders an underlying alpha checkerboard for transparent videos (`Hap Alpha`, `Hap R`, `Hap Q Alpha`).
+  - **Channel Inspector**: Switch between `🎨 Full RGBA`, `👁 Isolated Alpha Matte (B&W)`, and `🌈 RGB Only`.
+- 📊 **Stream Technical Inspector**:
+  - Live inspection card showing FourCC chip, native resolution & aspect ratio, total frames, duration, container type, bitrate, and file size on disk.
+  - **1-Click "Copy Media Info"** and native **"Reveal in Explorer"** integration.
+  - Integrated PNG/JPEG/TIFF sequence exporter.
+- 🚀 **Smart Video Encoder with 1-Click Presets**:
+  - Presets: `🌟 Hap Q (Production)`, `💎 Hap R (BC7 Ultra)`, `🎭 Hap Q Alpha (Broadcast)`, `⚡ Hap 1 (Fastest)`, `🪶 Hap Alpha (DXT5)`, and `⚙️ Custom`.
+  - **Sequence Auto-Detection & Thumbnail**: Automatically detects image range, dimensions, total frame count, and loads an instant visual thumbnail preview.
+  - **Auto-Naming**: Intelligently names output files based on sequence folder and selected preset (e.g. `MyAnim_HapQ.mov`).
+  - **Real-Time Telemetry**: Live progress bar with speed (FPS), elapsed time, and ETA calculations.
+  - **1-Click Post-Encode Pipeline**: Prominent `▶ Load into Player & Inspect` button to verify encodes in the player immediately.
+- 🛠 **Hardware & Diagnostics Dashboard**: Real-time GPU adapter inspection, driver backend, BC texture capability detection, and searchable event log terminal with clipboard export.
 
 ---
 
