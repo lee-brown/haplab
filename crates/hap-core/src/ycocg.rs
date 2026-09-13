@@ -66,54 +66,56 @@ pub fn rgba_to_scaled_ycocg_dxt5_input(
         .for_each(|(by, out_row)| {
             let row_rgba = &rgba[by * block_row_bytes..(by + 1) * block_row_bytes];
             for bx in 0..blocks_x {
-                // Step 1: Collect pixels of the 4x4 block and compute max chroma deviation
-                let mut ycocg_pixels = [(0u8, 0u8, 0u8); 16];
+                let mut y_vals = [0u8; 16];
+                let mut co_diffs = [0i32; 16];
+                let mut cg_diffs = [0i32; 16];
                 let mut max_dev = 0i32;
 
                 for py in 0..4 {
+                    let row_offset = (py * width + bx * 4) * 4;
+                    let src_slice = &row_rgba[row_offset..row_offset + 16];
+
                     for px in 0..4 {
-                        let x = bx * 4 + px;
-                        let src_idx = (py * width + x) * 4;
-                        let r = row_rgba[src_idx];
-                        let g = row_rgba[src_idx + 1];
-                        let b = row_rgba[src_idx + 2];
+                        let i = px * 4;
+                        let r = src_slice[i] as i32;
+                        let g = src_slice[i + 1] as i32;
+                        let b = src_slice[i + 2] as i32;
 
-                        let (lum, co, cg) = rgb_to_ycocg(r, g, b);
+                        let y = ((r + 2 * g + b) >> 2) as u8;
+                        let co_diff = (r - b) >> 1;
+                        let cg_diff = (-r + 2 * g - b) >> 2;
+
                         let pi = py * 4 + px;
-                        ycocg_pixels[pi] = (lum, co, cg);
+                        y_vals[pi] = y;
+                        co_diffs[pi] = co_diff;
+                        cg_diffs[pi] = cg_diff;
 
-                        let dev_co = (co as i32 - 128).abs();
-                        let dev_cg = (cg as i32 - 128).abs();
-                        max_dev = max_dev.max(dev_co).max(dev_cg);
+                        max_dev = max_dev.max(co_diff.abs()).max(cg_diff.abs());
                     }
                 }
 
-                // Step 2: Determine per-block scale (1, 2, or 4)
-                let scale = if max_dev <= 31 {
-                    4
+                let (scale_shift, scale_indicator) = if max_dev <= 31 {
+                    (2, 24u8) // scale 4: ((4 - 1) * 8) = 24
                 } else if max_dev <= 63 {
-                    2
+                    (1, 8u8)  // scale 2: ((2 - 1) * 8) = 8
                 } else {
-                    1
+                    (0, 0u8)  // scale 1: ((1 - 1) * 8) = 0
                 };
 
-                let blue_scale_indicator = ((scale - 1) * 8) as u8;
-
-                // Step 3: Write scaled values to output
                 for py in 0..4 {
+                    let dst_offset = (py * width + bx * 4) * 4;
+                    let dst_slice = &mut out_row[dst_offset..dst_offset + 16];
+
                     for px in 0..4 {
-                        let x = bx * 4 + px;
-                        let dst_idx = (py * width + x) * 4;
                         let pi = py * 4 + px;
-                        let (lum, co, cg) = ycocg_pixels[pi];
+                        let co_scaled = ((co_diffs[pi] << scale_shift) + 128).clamp(0, 255) as u8;
+                        let cg_scaled = ((cg_diffs[pi] << scale_shift) + 128).clamp(0, 255) as u8;
 
-                        let co_scaled = ((co as i32 - 128) * scale + 128).clamp(0, 255) as u8;
-                        let cg_scaled = ((cg as i32 - 128) * scale + 128).clamp(0, 255) as u8;
-
-                        out_row[dst_idx] = co_scaled;               // R -> Co
-                        out_row[dst_idx + 1] = cg_scaled;           // G -> Cg
-                        out_row[dst_idx + 2] = blue_scale_indicator;// B -> Scale
-                        out_row[dst_idx + 3] = lum;                 // A -> Y
+                        let di = px * 4;
+                        dst_slice[di] = co_scaled;
+                        dst_slice[di + 1] = cg_scaled;
+                        dst_slice[di + 2] = scale_indicator;
+                        dst_slice[di + 3] = y_vals[pi];
                     }
                 }
             }
@@ -157,6 +159,17 @@ pub fn scaled_ycocg_dxt5_output_to_rgba(
         });
 }
 
+const INV_SCALE_LUT: [f32; 256] = {
+    let mut lut = [0.0f32; 256];
+    let mut i = 0;
+    while i < 256 {
+        let s = (i / 8) + 1;
+        lut[i] = 1.0 / (s as f32);
+        i += 1;
+    }
+    lut
+};
+
 /// Fused, single-pass Hap Q (Scaled YCoCg DXT5) decoder.
 /// Decodes 16-byte BC3 blocks directly into final RGBA8 scanlines across all CPU cores,
 /// completely bypassing intermediate buffer allocations.
@@ -198,17 +211,18 @@ pub fn decode_scaled_ycocg_bc3_direct(
                 for py in 0..4 {
                     let dst_y_offset = py * width * 4 + bx * 16;
                     let dst_slice = &mut dst_block_row[dst_y_offset..dst_y_offset + 16];
+                    let py4 = py * 4;
 
                     for px in 0..4 {
-                        let src_i = (py * 4 + px) * 4;
+                        let src_i = (py4 + px) * 4;
                         let co_scaled = block_pixels[src_i] as f32;
                         let cg_scaled = block_pixels[src_i + 1] as f32;
                         let blue = block_pixels[src_i + 2];
                         let lum = block_pixels[src_i + 3] as f32;
 
-                        let scale = ((blue / 8) + 1).max(1) as f32;
-                        let co = (co_scaled - 128.0) / scale;
-                        let cg = (cg_scaled - 128.0) / scale;
+                        let inv_scale = INV_SCALE_LUT[blue as usize];
+                        let co = (co_scaled - 128.0) * inv_scale;
+                        let cg = (cg_scaled - 128.0) * inv_scale;
 
                         let r = (lum + co - cg).clamp(0.0, 255.0) as u8;
                         let g = (lum + cg).clamp(0.0, 255.0) as u8;
