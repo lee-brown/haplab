@@ -31,13 +31,16 @@ pub fn compress_bc1(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>,
     Ok(out)
 }
 
-/// Decompress DXT1 / BC1 to RGBA8.
+use rayon::prelude::*;
+
+/// Decompress DXT1 / BC1 to RGBA8 in parallel across block rows using bcdec_rs.
 pub fn decompress_bc1(bc1: &[u8], width: usize, height: usize) -> Result<Vec<u8>, DxtError> {
     if width % 4 != 0 || height % 4 != 0 {
         return Err(DxtError::InvalidDimensions { width, height });
     }
-    let fmt = texpresso::Format::Bc1;
-    let expected_len = fmt.compressed_size(width, height);
+    let blocks_x = width / 4;
+    let blocks_y = height / 4;
+    let expected_len = blocks_x * blocks_y * 8;
     if bc1.len() < expected_len {
         return Err(DxtError::BufferSizeMismatch {
             expected: expected_len,
@@ -46,7 +49,19 @@ pub fn decompress_bc1(bc1: &[u8], width: usize, height: usize) -> Result<Vec<u8>
     }
 
     let mut out = vec![0u8; width * height * 4];
-    fmt.decompress(&bc1[..expected_len], width, height, &mut out);
+    let row_bytes = width * 4 * 4;
+
+    out.par_chunks_mut(row_bytes)
+        .enumerate()
+        .for_each(|(by, out_row)| {
+            let row_bc1 = &bc1[by * blocks_x * 8..(by + 1) * blocks_x * 8];
+            for bx in 0..blocks_x {
+                let block = &row_bc1[bx * 8..(bx + 1) * 8];
+                let dst = &mut out_row[bx * 16..];
+                bcdec_rs::bc1(block, dst, width * 4);
+            }
+        });
+
     Ok(out)
 }
 
@@ -69,13 +84,14 @@ pub fn compress_bc3(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>,
     Ok(out)
 }
 
-/// Decompress DXT5 / BC3 to RGBA8.
+/// Decompress DXT5 / BC3 to RGBA8 in parallel across block rows using bcdec_rs.
 pub fn decompress_bc3(bc3: &[u8], width: usize, height: usize) -> Result<Vec<u8>, DxtError> {
     if width % 4 != 0 || height % 4 != 0 {
         return Err(DxtError::InvalidDimensions { width, height });
     }
-    let fmt = texpresso::Format::Bc3;
-    let expected_len = fmt.compressed_size(width, height);
+    let blocks_x = width / 4;
+    let blocks_y = height / 4;
+    let expected_len = blocks_x * blocks_y * 16;
     if bc3.len() < expected_len {
         return Err(DxtError::BufferSizeMismatch {
             expected: expected_len,
@@ -84,7 +100,19 @@ pub fn decompress_bc3(bc3: &[u8], width: usize, height: usize) -> Result<Vec<u8>
     }
 
     let mut out = vec![0u8; width * height * 4];
-    fmt.decompress(&bc3[..expected_len], width, height, &mut out);
+    let row_bytes = width * 4 * 4;
+
+    out.par_chunks_mut(row_bytes)
+        .enumerate()
+        .for_each(|(by, out_row)| {
+            let row_bc3 = &bc3[by * blocks_x * 16..(by + 1) * blocks_x * 16];
+            for bx in 0..blocks_x {
+                let block = &row_bc3[bx * 16..(bx + 1) * 16];
+                let dst = &mut out_row[bx * 16..];
+                bcdec_rs::bc3(block, dst, width * 4);
+            }
+        });
+
     Ok(out)
 }
 
@@ -118,13 +146,14 @@ pub fn compress_bc4(alpha: &[u8], width: usize, height: usize) -> Result<Vec<u8>
     Ok(out)
 }
 
-/// Decompress BC4 / RGTC1 to 8-bit alpha (grayscale).
+/// Decompress BC4 / RGTC1 to 8-bit alpha (grayscale) in parallel across block rows using bcdec_rs.
 pub fn decompress_bc4(bc4: &[u8], width: usize, height: usize) -> Result<Vec<u8>, DxtError> {
     if width % 4 != 0 || height % 4 != 0 {
         return Err(DxtError::InvalidDimensions { width, height });
     }
-    let fmt = texpresso::Format::Bc4;
-    let expected_len = fmt.compressed_size(width, height);
+    let blocks_x = width / 4;
+    let blocks_y = height / 4;
+    let expected_len = blocks_x * blocks_y * 8;
     if bc4.len() < expected_len {
         return Err(DxtError::BufferSizeMismatch {
             expected: expected_len,
@@ -132,12 +161,20 @@ pub fn decompress_bc4(bc4: &[u8], width: usize, height: usize) -> Result<Vec<u8>
         });
     }
 
-    let mut rgba_buf = vec![0u8; width * height * 4];
-    fmt.decompress(&bc4[..expected_len], width, height, &mut rgba_buf);
     let mut out = vec![0u8; width * height];
-    for i in 0..(width * height) {
-        out[i] = rgba_buf[i * 4];
-    }
+    let row_bytes = width * 4;
+
+    out.par_chunks_mut(row_bytes)
+        .enumerate()
+        .for_each(|(by, out_row)| {
+            let row_bc4 = &bc4[by * blocks_x * 8..(by + 1) * blocks_x * 8];
+            for bx in 0..blocks_x {
+                let block = &row_bc4[bx * 8..(bx + 1) * 8];
+                let dst = &mut out_row[bx * 4..];
+                bcdec_rs::bc4(block, dst, width, false);
+            }
+        });
+
     Ok(out)
 }
 

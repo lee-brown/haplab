@@ -2,6 +2,7 @@
 //!
 //! Provides CPU-based encoding using PCA Mode 6 and decoding via texture2ddecoder.
 
+use rayon::prelude::*;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -60,13 +61,14 @@ pub fn compress_bc7(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>,
     Ok(out)
 }
 
-/// Decompress BC7 blocks into RGBA8 pixels.
+/// Decompress BC7 blocks into RGBA8 pixels in parallel across block rows using bcdec_rs.
 pub fn decompress_bc7(bc7: &[u8], width: usize, height: usize) -> Result<Vec<u8>, Bc7Error> {
     if width % 4 != 0 || height % 4 != 0 {
         return Err(Bc7Error::InvalidDimensions { width, height });
     }
-    let num_blocks = (width / 4) * (height / 4);
-    let expected_bc7_len = num_blocks * 16;
+    let blocks_x = width / 4;
+    let blocks_y = height / 4;
+    let expected_bc7_len = blocks_x * blocks_y * 16;
     if bc7.len() < expected_bc7_len {
         return Err(Bc7Error::BufferSizeMismatch {
             expected: expected_bc7_len,
@@ -74,21 +76,19 @@ pub fn decompress_bc7(bc7: &[u8], width: usize, height: usize) -> Result<Vec<u8>
         });
     }
 
-    let mut u32_buf = vec![0u32; width * height];
-    texture2ddecoder::decode_bc7(&bc7[..expected_bc7_len], width, height, &mut u32_buf)
-        .map_err(|e| Bc7Error::DecompressFailed(e.to_string()))?;
-
-    // Convert u32 pixels to RGBA8 bytes.
-    // texture2ddecoder stores pixels in native byte order as [R, G, B, A] / 0xAABBGGRR.
     let mut rgba_out = vec![0u8; width * height * 4];
-    for (i, &p) in u32_buf.iter().enumerate() {
-        let bytes = p.to_le_bytes();
-        // texture2ddecoder decodes pixels as BGRA32 (bytes[0]=B, bytes[1]=G, bytes[2]=R, bytes[3]=A)
-        rgba_out[i * 4] = bytes[2];
-        rgba_out[i * 4 + 1] = bytes[1];
-        rgba_out[i * 4 + 2] = bytes[0];
-        rgba_out[i * 4 + 3] = bytes[3];
-    }
+    let row_bytes = width * 4 * 4;
+
+    rgba_out.par_chunks_mut(row_bytes)
+        .enumerate()
+        .for_each(|(by, out_row)| {
+            let row_bc7 = &bc7[by * blocks_x * 16..(by + 1) * blocks_x * 16];
+            for bx in 0..blocks_x {
+                let block = &row_bc7[bx * 16..(bx + 1) * 16];
+                let dst = &mut out_row[bx * 16..];
+                bcdec_rs::bc7(block, dst, width * 4);
+            }
+        });
 
     Ok(rgba_out)
 }

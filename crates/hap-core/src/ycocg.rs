@@ -157,6 +157,76 @@ pub fn scaled_ycocg_dxt5_output_to_rgba(
         });
 }
 
+/// Fused, single-pass Hap Q (Scaled YCoCg DXT5) decoder.
+/// Decodes 16-byte BC3 blocks directly into final RGBA8 scanlines across all CPU cores,
+/// completely bypassing intermediate buffer allocations.
+pub fn decode_scaled_ycocg_bc3_direct(
+    bc3_data: &[u8],
+    width: usize,
+    height: usize,
+    out: &mut [u8],
+) -> Result<(), crate::dxt::DxtError> {
+    if width % 4 != 0 || height % 4 != 0 {
+        return Err(crate::dxt::DxtError::InvalidDimensions { width, height });
+    }
+    let blocks_x = width / 4;
+    let blocks_y = height / 4;
+    let expected_len = blocks_x * blocks_y * 16;
+    if bc3_data.len() < expected_len {
+        return Err(crate::dxt::DxtError::BufferSizeMismatch {
+            expected: expected_len,
+            actual: bc3_data.len(),
+        });
+    }
+
+    let dst_row_bytes = width * 4 * 4;
+
+    out.par_chunks_mut(dst_row_bytes)
+        .enumerate()
+        .for_each(|(by, dst_block_row)| {
+            let src_block_row_offset = by * blocks_x * 16;
+            let mut block_pixels = [0u8; 64];
+
+            for bx in 0..blocks_x {
+                let block_start = src_block_row_offset + bx * 16;
+                let block = &bc3_data[block_start..block_start + 16];
+
+                // Decompress 4x4 block: R=Co, G=Cg, B=Scale, A=Y with pitch = 16 bytes
+                bcdec_rs::bc3(block, &mut block_pixels, 16);
+
+                // Reconstruct RGBA into final scanlines
+                for py in 0..4 {
+                    let dst_y_offset = py * width * 4 + bx * 16;
+                    let dst_slice = &mut dst_block_row[dst_y_offset..dst_y_offset + 16];
+
+                    for px in 0..4 {
+                        let src_i = (py * 4 + px) * 4;
+                        let co_scaled = block_pixels[src_i] as f32;
+                        let cg_scaled = block_pixels[src_i + 1] as f32;
+                        let blue = block_pixels[src_i + 2];
+                        let lum = block_pixels[src_i + 3] as f32;
+
+                        let scale = ((blue / 8) + 1).max(1) as f32;
+                        let co = (co_scaled - 128.0) / scale;
+                        let cg = (cg_scaled - 128.0) / scale;
+
+                        let r = (lum + co - cg).clamp(0.0, 255.0) as u8;
+                        let g = (lum + cg).clamp(0.0, 255.0) as u8;
+                        let b = (lum - co - cg).clamp(0.0, 255.0) as u8;
+
+                        let dst_i = px * 4;
+                        dst_slice[dst_i] = r;
+                        dst_slice[dst_i + 1] = g;
+                        dst_slice[dst_i + 2] = b;
+                        dst_slice[dst_i + 3] = 255;
+                    }
+                }
+            }
+        });
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

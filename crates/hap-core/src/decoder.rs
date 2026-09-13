@@ -105,10 +105,9 @@ pub fn decode_frame_to_rgba(
         let alpha_data = &alpha_payload[alpha_hdr.header_size..alpha_end];
         let alpha_bc4 = unpack_section_payload(alpha_hdr.section_type, alpha_data)?;
 
-        // Decompress color BC3 and inverse YCoCg
-        let ycocg_decompressed = dxt::decompress_bc3(&color_bc3, width, height)?;
+        // Decompress color BC3 and inverse YCoCg directly in single pass
         let mut rgba = vec![0u8; width * height * 4];
-        ycocg::scaled_ycocg_dxt5_output_to_rgba(&ycocg_decompressed, width, height, &mut rgba);
+        ycocg::decode_scaled_ycocg_bc3_direct(&color_bc3, width, height, &mut rgba)?;
 
         // Decompress alpha BC4 and write into alpha channel
         let alpha_decompressed = dxt::decompress_bc4(&alpha_bc4, width, height)?;
@@ -133,10 +132,9 @@ pub fn decode_frame_to_rgba(
                 Ok(rgba)
             }
             0x0F => {
-                // Hap Q: Scaled YCoCg in DXT5 / BC3
-                let ycocg_buf = dxt::decompress_bc3(&texture_bytes, width, height)?;
+                // Hap Q: Scaled YCoCg in DXT5 / BC3 (fused single-pass decode)
                 let mut rgba = vec![0u8; width * height * 4];
-                ycocg::scaled_ycocg_dxt5_output_to_rgba(&ycocg_buf, width, height, &mut rgba);
+                ycocg::decode_scaled_ycocg_bc3_direct(&texture_bytes, width, height, &mut rgba)?;
                 Ok(rgba)
             }
             0x01 => {
