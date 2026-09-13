@@ -594,107 +594,116 @@ impl eframe::App for HapStudioApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let is_dragging = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
 
-        ui.vertical(|ui| {
-            // --- TOP TITLE BAR ---
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.heading(
-                    RichText::new("HAP Studio")
-                        .size(18.0)
-                        .color(Color32::WHITE)
-                        .strong(),
-                );
-                ui.label(RichText::new("v0.1.0").color(colors::TEXT_FAINT));
+        let outer_frame = egui::Frame::new().inner_margin(egui::Margin::symmetric(20, 14));
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if self.gpu_supports_bc {
-                        render_badge(ui, "GPU Acceleration Active", Color32::from_rgb(16, 40, 30), colors::ACCENT_GREEN);
-                    } else {
-                        render_badge(ui, "CPU Mode", Color32::from_rgb(38, 35, 25), colors::TEXT_MUTED);
-                    }
-                });
-            });
-
-            ui.add_space(4.0);
-
-            // --- NAVIGATION TABS ---
-            ui.horizontal(|ui| {
-                let tab_btn = |ui: &mut egui::Ui, active: bool, title: &str, badge_count: Option<usize>| {
-                    let bg = if active { colors::BG_CARD_HOVER } else { Color32::TRANSPARENT };
-                    let border = if active { Stroke::new(1.5, colors::ACCENT_CYAN) } else { Stroke::NONE };
-                    let fg = if active { Color32::WHITE } else { colors::TEXT_MUTED };
-
-                    let btn = egui::Button::new(RichText::new(title).color(fg).strong())
-                        .fill(bg)
-                        .stroke(border)
-                        .corner_radius(CornerRadius::same(6));
-                    let resp = ui.add(btn);
-                    if let Some(cnt) = badge_count {
-                        if cnt > 0 {
-                            render_badge(ui, &format!("{}", cnt), Color32::from_rgb(30, 45, 65), colors::ACCENT_CYAN);
-                        }
-                    }
-                    resp.clicked()
-                };
-
-                let mov_loaded = self.reader.is_some();
-                if tab_btn(ui, self.active_tab == ActiveTab::PlayerInspector, "Player & Inspector", if mov_loaded { Some(1) } else { None }) {
-                    self.active_tab = ActiveTab::PlayerInspector;
-                }
-
-                let frames_detected = self.enc_detected_frames;
-                if tab_btn(ui, self.active_tab == ActiveTab::Encoder, "Encoder", if frames_detected > 0 { Some(frames_detected) } else { None }) {
-                    self.active_tab = ActiveTab::Encoder;
-                }
-
-                if tab_btn(ui, self.active_tab == ActiveTab::Diagnostics, "Diagnostics", None) {
-                    self.active_tab = ActiveTab::Diagnostics;
-                }
-            });
-
-            ui.separator();
-
-            // Drag & Drop Hover Border
-            if is_dragging {
-                ui.painter().rect_stroke(
-                    ui.max_rect(),
-                    CornerRadius::same(8),
-                    Stroke::new(2.0, colors::ACCENT_CYAN),
-                    egui::StrokeKind::Inside,
-                );
-            }
-
-            // --- TAB CONTENT ---
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.add_space(4.0);
-                    match self.active_tab {
-                        ActiveTab::PlayerInspector => self.show_player_tab(ui),
-                        ActiveTab::Encoder => self.show_encoder_tab(ui),
-                        ActiveTab::Diagnostics => self.show_diagnostics_tab(ui),
-                    }
-                    ui.add_space(24.0);
-                });
-
-            // --- FOOTER STATUS ---
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                ui.separator();
+        outer_frame.show(ui, |ui| {
+            ui.vertical(|ui| {
+                // --- TOP TITLE BAR ---
+                ui.add_space(2.0);
                 ui.horizontal(|ui| {
-                    if let Some((ref msg, time, color)) = self.toast {
-                        if time.elapsed().as_secs_f32() < 4.0 {
-                            ui.label(RichText::new(msg).color(color).strong());
-                        } else {
-                            self.toast = None;
-                        }
-                    } else if let Some(ref path) = self.mov_path {
-                        ui.label(RichText::new(format!("File: {}", path.display())).color(colors::TEXT_MUTED));
-                    } else {
-                        ui.label(RichText::new("Ready. Drop a MOV file to inspect, or an image folder to encode.").color(colors::TEXT_FAINT));
-                    }
+                    ui.heading(
+                        RichText::new("HAP Studio")
+                            .size(20.0)
+                            .color(Color32::WHITE)
+                            .strong(),
+                    );
+                    ui.label(RichText::new("v0.1.0").color(colors::TEXT_FAINT));
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(format!("Device: {}", self.gpu_adapter_name)).color(colors::TEXT_FAINT).size(11.0));
+                        if self.gpu_supports_bc {
+                            render_badge(ui, "GPU Acceleration Active", Color32::from_rgb(16, 40, 30), colors::ACCENT_GREEN);
+                        } else {
+                            render_badge(ui, "CPU Mode", Color32::from_rgb(38, 35, 25), colors::TEXT_MUTED);
+                        }
+                    });
+                });
+
+                ui.add_space(8.0);
+
+                // --- NAVIGATION TABS ---
+                ui.horizontal(|ui| {
+                    let tab_btn = |ui: &mut egui::Ui, active: bool, title: &str, badge_count: Option<usize>| {
+                        let bg = if active { colors::BG_CARD_HOVER } else { Color32::TRANSPARENT };
+                        let border = if active { Stroke::new(1.5, colors::ACCENT_CYAN) } else { Stroke::NONE };
+                        let fg = if active { Color32::WHITE } else { colors::TEXT_MUTED };
+
+                        let btn = egui::Button::new(RichText::new(title).size(13.5).color(fg).strong())
+                            .min_size(Vec2::new(140.0, 36.0))
+                            .fill(bg)
+                            .stroke(border)
+                            .corner_radius(CornerRadius::same(7));
+                        let resp = ui.add(btn);
+                        if let Some(cnt) = badge_count {
+                            if cnt > 0 {
+                                render_badge(ui, &format!("{}", cnt), Color32::from_rgb(30, 45, 65), colors::ACCENT_CYAN);
+                            }
+                        }
+                        resp.clicked()
+                    };
+
+                    let mov_loaded = self.reader.is_some();
+                    if tab_btn(ui, self.active_tab == ActiveTab::PlayerInspector, "Player & Inspector", if mov_loaded { Some(1) } else { None }) {
+                        self.active_tab = ActiveTab::PlayerInspector;
+                    }
+
+                    let frames_detected = self.enc_detected_frames;
+                    if tab_btn(ui, self.active_tab == ActiveTab::Encoder, "Encoder", if frames_detected > 0 { Some(frames_detected) } else { None }) {
+                        self.active_tab = ActiveTab::Encoder;
+                    }
+
+                    if tab_btn(ui, self.active_tab == ActiveTab::Diagnostics, "Diagnostics", None) {
+                        self.active_tab = ActiveTab::Diagnostics;
+                    }
+                });
+
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(6.0);
+
+                // Drag & Drop Hover Border
+                if is_dragging {
+                    ui.painter().rect_stroke(
+                        ui.max_rect(),
+                        CornerRadius::same(8),
+                        Stroke::new(2.0, colors::ACCENT_CYAN),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+
+                // --- TAB CONTENT ---
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add_space(6.0);
+                        match self.active_tab {
+                            ActiveTab::PlayerInspector => self.show_player_tab(ui),
+                            ActiveTab::Encoder => self.show_encoder_tab(ui),
+                            ActiveTab::Diagnostics => self.show_diagnostics_tab(ui),
+                        }
+                        ui.add_space(32.0);
+                    });
+
+                // --- FOOTER STATUS ---
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if let Some((ref msg, time, color)) = self.toast {
+                            if time.elapsed().as_secs_f32() < 4.0 {
+                                ui.label(RichText::new(msg).color(color).strong());
+                            } else {
+                                self.toast = None;
+                            }
+                        } else if let Some(ref path) = self.mov_path {
+                            ui.label(RichText::new(format!("File: {}", path.display())).color(colors::TEXT_MUTED));
+                        } else {
+                            ui.label(RichText::new("Ready. Drop a MOV file to inspect, or an image folder to encode.").color(colors::TEXT_FAINT));
+                        }
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(RichText::new(format!("Device: {}", self.gpu_adapter_name)).color(colors::TEXT_FAINT).size(11.0));
+                        });
                     });
                 });
             });
@@ -716,19 +725,19 @@ impl HapStudioApp {
                 .fill(colors::BG_CARD)
                 .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
                 .corner_radius(CornerRadius::same(8))
-                .inner_margin(egui::Margin::same(28));
+                .inner_margin(egui::Margin::symmetric(36, 32));
 
             frame.show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(8.0);
-                    ui.heading(RichText::new("Drop a HAP QuickTime file (.mov) here").size(18.0).color(Color32::WHITE).strong());
-                    ui.add_space(4.0);
+                    ui.heading(RichText::new("Drop a HAP QuickTime file (.mov) here").size(19.0).color(Color32::WHITE).strong());
+                    ui.add_space(6.0);
                     ui.label(RichText::new("Playback and inspect Hap 1, Hap Alpha, Hap Q, Hap Q Alpha, Hap R, and Hap HDR files.").color(colors::TEXT_MUTED));
-                    ui.add_space(14.0);
+                    ui.add_space(18.0);
 
                     ui.horizontal(|ui| {
-                        ui.add_space(ui.available_width() * 0.5 - 110.0);
-                        if ui.button(RichText::new("Open File...").size(14.0)).clicked() {
+                        ui.add_space(ui.available_width() * 0.5 - 130.0);
+                        if ui.add(egui::Button::new(RichText::new("Open File...").size(14.0)).min_size(Vec2::new(120.0, 36.0))).clicked() {
                             if let Some(path) = rfd::FileDialog::new()
                                 .add_filter("QuickTime HAP Video", &["mov", "mp4"])
                                 .pick_file()
@@ -737,11 +746,11 @@ impl HapStudioApp {
                             }
                         }
 
-                        if ui.button(RichText::new("Switch to Encoder").size(14.0)).clicked() {
+                        if ui.add(egui::Button::new(RichText::new("Switch to Encoder").size(14.0)).min_size(Vec2::new(140.0, 36.0))).clicked() {
                             self.active_tab = ActiveTab::Encoder;
                         }
                     });
-                    ui.add_space(4.0);
+                    ui.add_space(8.0);
                 });
             });
             return;
@@ -754,7 +763,7 @@ impl HapStudioApp {
 
         // --- TOP TOOLBAR ---
         ui.horizontal(|ui| {
-            if ui.button("Open File...").clicked() {
+            if ui.add(egui::Button::new("Open File...").min_size(Vec2::new(96.0, 32.0))).clicked() {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("QuickTime HAP Video", &["mov", "mp4"])
                     .pick_file()
@@ -764,17 +773,19 @@ impl HapStudioApp {
             }
 
             if let Some(ref path) = self.mov_path {
-                if ui.button("Show in Explorer").clicked() {
+                if ui.add(egui::Button::new("Show in Explorer").min_size(Vec2::new(120.0, 32.0))).clicked() {
                     reveal_in_file_manager(path);
                 }
             }
 
             let export_text = if self.show_export_panel { "Hide Exporter" } else { "Export Frames..." };
-            if ui.selectable_label(self.show_export_panel, export_text).clicked() {
+            if ui.add(egui::Button::new(export_text).min_size(Vec2::new(120.0, 32.0))).clicked() {
                 self.show_export_panel = !self.show_export_panel;
             }
 
+            ui.add_space(8.0);
             ui.separator();
+            ui.add_space(8.0);
 
             // Channel Mode Selector
             ui.label(RichText::new("Channels:").color(colors::TEXT_MUTED));
@@ -789,7 +800,9 @@ impl HapStudioApp {
                 }
             }
 
+            ui.add_space(8.0);
             ui.separator();
+            ui.add_space(8.0);
 
             // Background Mode Selector
             ui.label(RichText::new("Background:").color(colors::TEXT_MUTED));
@@ -800,12 +813,12 @@ impl HapStudioApp {
 
         // --- EXPORT PANEL (Collapsible) ---
         if self.show_export_panel {
-            ui.add_space(4.0);
+            ui.add_space(8.0);
             let frame = egui::Frame::canvas(ui.style())
                 .fill(colors::BG_CARD)
                 .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
                 .corner_radius(CornerRadius::same(6))
-                .inner_margin(egui::Margin::same(12));
+                .inner_margin(egui::Margin::same(16));
 
             frame.show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -819,7 +832,7 @@ impl HapStudioApp {
                             ui.selectable_value(&mut self.export_format, "tiff".into(), "TIFF (.tiff)");
                         });
 
-                    if ui.button(RichText::new("Choose Destination Folder & Export").strong()).clicked() {
+                    if ui.add(egui::Button::new(RichText::new("Choose Destination Folder & Export").strong()).min_size(Vec2::new(220.0, 32.0))).clicked() {
                         if let Some(folder) = rfd::FileDialog::new().pick_folder() {
                             if let Some(ref path) = self.mov_path {
                                 let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -833,7 +846,7 @@ impl HapStudioApp {
                 });
 
                 if let Some(ref status) = self.export_status {
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                     match status {
                         WorkerProgress::Started { total } => {
                             ui.label(format!("Exporting {} frames...", total));
@@ -860,11 +873,11 @@ impl HapStudioApp {
             });
         }
 
-        ui.add_space(6.0);
+        ui.add_space(10.0);
 
         // --- MAIN VIEWPORT (Video Display) ---
         let avail_size = ui.available_size();
-        let target_height = (avail_size.y - 210.0).clamp(200.0, 680.0);
+        let target_height = (avail_size.y - 230.0).clamp(200.0, 680.0);
 
         if let Some(ref texture) = self.preview_texture {
             let aspect = texture.aspect_ratio();
@@ -906,14 +919,14 @@ impl HapStudioApp {
             });
         }
 
-        ui.add_space(6.0);
+        ui.add_space(10.0);
 
         // --- TIMELINE & TRANSPORT CONTROLS ---
         let frame = egui::Frame::canvas(ui.style())
             .fill(colors::BG_CARD)
             .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
             .corner_radius(CornerRadius::same(6))
-            .inner_margin(egui::Margin::symmetric(14, 8));
+            .inner_margin(egui::Margin::symmetric(20, 14));
 
         frame.show(ui, |ui| {
             // Timeline Scrubber
@@ -922,12 +935,12 @@ impl HapStudioApp {
 
             ui.horizontal(|ui| {
                 let timecode = format_smpte_timecode(self.current_frame, fps);
-                ui.label(RichText::new(timecode).monospace().size(15.0).color(colors::ACCENT_CYAN).strong());
+                ui.label(RichText::new(timecode).monospace().size(16.0).color(colors::ACCENT_CYAN).strong());
 
                 let slider = egui::Slider::new(&mut self.current_frame, 0..=max_frame)
                     .show_value(false)
                     .trailing_fill(true);
-                ui.add_sized([ui.available_width() - 150.0, 20.0], slider);
+                ui.add_sized([ui.available_width() - 170.0, 24.0], slider);
 
                 let pct = if count > 0 { (self.current_frame as f32 / count as f32) * 100.0 } else { 0.0 };
                 ui.monospace(format!("{}/{} ({:.0}%)", self.current_frame + 1, count, pct));
@@ -937,21 +950,21 @@ impl HapStudioApp {
                 self.update_preview_frame(&ctx);
             }
 
-            ui.add_space(4.0);
+            ui.add_space(8.0);
 
             // Transport Buttons
             ui.horizontal(|ui| {
-                if ui.button("|<").on_hover_text("Jump to Start (Home)").clicked() {
+                if ui.add(egui::Button::new("|<").min_size(Vec2::new(38.0, 32.0))).on_hover_text("Jump to Start (Home)").clicked() {
                     self.current_frame = 0;
                     self.update_preview_frame(&ctx);
                 }
 
-                if ui.button("-10").on_hover_text("Step -10 Frames (Shift+Left)").clicked() {
+                if ui.add(egui::Button::new("-10").min_size(Vec2::new(44.0, 32.0))).on_hover_text("Step -10 Frames (Shift+Left)").clicked() {
                     self.current_frame = self.current_frame.saturating_sub(10);
                     self.update_preview_frame(&ctx);
                 }
 
-                if ui.button("<").on_hover_text("Step -1 Frame (Left)").clicked() {
+                if ui.add(egui::Button::new("<").min_size(Vec2::new(38.0, 32.0))).on_hover_text("Step -1 Frame (Left)").clicked() {
                     self.current_frame = self.current_frame.saturating_sub(1);
                     self.update_preview_frame(&ctx);
                 }
@@ -962,56 +975,58 @@ impl HapStudioApp {
                     .fill(if self.is_playing { colors::ACCENT_AMBER } else { colors::ACCENT_BLUE })
                     .corner_radius(CornerRadius::same(6));
 
-                if ui.add_sized([75.0, 24.0], play_btn).clicked() {
+                if ui.add_sized([90.0, 34.0], play_btn).clicked() {
                     self.is_playing = !self.is_playing;
                     self.last_frame_time = Instant::now();
                 }
 
-                if ui.button(">").on_hover_text("Step +1 Frame (Right)").clicked() {
+                if ui.add(egui::Button::new(">").min_size(Vec2::new(38.0, 32.0))).on_hover_text("Step +1 Frame (Right)").clicked() {
                     if self.current_frame + 1 < count {
                         self.current_frame += 1;
                         self.update_preview_frame(&ctx);
                     }
                 }
 
-                if ui.button("+10").on_hover_text("Step +10 Frames (Shift+Right)").clicked() {
+                if ui.add(egui::Button::new("+10").min_size(Vec2::new(44.0, 32.0))).on_hover_text("Step +10 Frames (Shift+Right)").clicked() {
                     self.current_frame = (self.current_frame + 10).min(count.saturating_sub(1));
                     self.update_preview_frame(&ctx);
                 }
 
-                if ui.button(">|").on_hover_text("Jump to End (End)").clicked() {
+                if ui.add(egui::Button::new(">|").min_size(Vec2::new(38.0, 32.0))).on_hover_text("Jump to End (End)").clicked() {
                     self.current_frame = count.saturating_sub(1);
                     self.update_preview_frame(&ctx);
                 }
 
+                ui.add_space(8.0);
                 ui.separator();
+                ui.add_space(8.0);
 
                 let loop_text = if self.loop_playback { "Loop: On" } else { "Loop: Off" };
-                if ui.selectable_label(self.loop_playback, loop_text).on_hover_text("Toggle Playback Looping (L)").clicked() {
+                if ui.add(egui::Button::new(loop_text).min_size(Vec2::new(85.0, 32.0))).on_hover_text("Toggle Playback Looping (L)").clicked() {
                     self.loop_playback = !self.loop_playback;
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new("Space: Play/Pause | Left/Right: Step | L: Loop").color(colors::TEXT_FAINT).size(11.0));
+                    ui.label(RichText::new("Space: Play/Pause | Left/Right: Step | L: Loop").color(colors::TEXT_FAINT).size(11.5));
                 });
             });
         });
 
-        ui.add_space(8.0);
+        ui.add_space(14.0);
 
         // --- TECHNICAL STREAM INSPECTOR CARD ---
         let inspector_frame = egui::Frame::canvas(ui.style())
             .fill(colors::BG_CARD)
             .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
             .corner_radius(CornerRadius::same(6))
-            .inner_margin(egui::Margin::same(12));
+            .inner_margin(egui::Margin::same(18));
 
         inspector_frame.show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.heading(RichText::new("Stream Information").size(14.0).color(colors::TEXT_PRIMARY));
+                ui.heading(RichText::new("Stream Information").size(15.0).color(colors::TEXT_PRIMARY));
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Copy Summary").clicked() {
+                    if ui.add(egui::Button::new("Copy Summary").min_size(Vec2::new(110.0, 30.0))).clicked() {
                         let report = format!(
                             "HAP Stream Information\nFile: {:?}\nFormat: {} [{}]\nResolution: {}x{}\nFrame Rate: {:.2} fps\nTotal Frames: {}\nDuration: {:.2}s\nAlpha: {}\nCompression: Snappy",
                             self.mov_path, format.name(), String::from_utf8_lossy(&format.fourcc()),
@@ -1024,9 +1039,9 @@ impl HapStudioApp {
                 });
             });
 
-            ui.add_space(6.0);
+            ui.add_space(10.0);
 
-            egui::Grid::new("stream_specs_grid").striped(true).spacing([24.0, 6.0]).show(ui, |ui| {
+            egui::Grid::new("stream_specs_grid").striped(true).spacing([32.0, 10.0]).show(ui, |ui| {
                 ui.label(RichText::new("Codec Format:").color(colors::TEXT_MUTED));
                 ui.horizontal(|ui| {
                     render_badge(ui, format.name(), colors::BG_ELEVATED, colors::ACCENT_CYAN);
@@ -1081,52 +1096,54 @@ impl HapStudioApp {
         let ctx = ui.ctx().clone();
 
         ui.horizontal(|ui| {
-            ui.heading(RichText::new("Video Encoder").size(18.0).color(Color32::WHITE));
+            ui.heading(RichText::new("Video Encoder").size(19.0).color(Color32::WHITE));
             ui.label(RichText::new("Encode an image sequence to a QuickTime HAP MOV file.").color(colors::TEXT_MUTED));
         });
-        ui.add_space(8.0);
+        ui.add_space(10.0);
 
         // --- SOURCE SEQUENCE CARD ---
         let input_frame = egui::Frame::canvas(ui.style())
             .fill(colors::BG_CARD)
             .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
             .corner_radius(CornerRadius::same(6))
-            .inner_margin(egui::Margin::same(12));
+            .inner_margin(egui::Margin::same(18));
 
         input_frame.show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.strong(RichText::new("Source Sequence").size(14.0));
+                ui.strong(RichText::new("Source Sequence").size(15.0));
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Select File...").clicked() {
-                        if let Some(file) = rfd::FileDialog::new().pick_file() {
-                            self.enc_input_path = Some(file);
+                    if ui.add(egui::Button::new("Choose Folder...").min_size(Vec2::new(125.0, 34.0))).clicked() {
+                        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                            self.enc_input_path = Some(folder);
                             self.scan_encoder_input(&ctx);
                         }
                     }
-                    if ui.button("Choose Folder...").clicked() {
-                        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                            self.enc_input_path = Some(folder);
+                    if ui.add(egui::Button::new("Select File...").min_size(Vec2::new(110.0, 34.0))).clicked() {
+                        if let Some(file) = rfd::FileDialog::new().pick_file() {
+                            self.enc_input_path = Some(file);
                             self.scan_encoder_input(&ctx);
                         }
                     }
                 });
             });
 
-            ui.add_space(6.0);
+            ui.add_space(10.0);
 
             if let Some(ref path) = self.enc_input_path {
                 ui.horizontal(|ui| {
                     if let Some(ref thumb) = self.enc_thumbnail_texture {
-                        let (rect, _response) = ui.allocate_exact_size(Vec2::new(72.0, 72.0), egui::Sense::hover());
+                        let (rect, _response) = ui.allocate_exact_size(Vec2::new(88.0, 88.0), egui::Sense::hover());
                         paint_transparency_checkerboard(ui.painter(), rect);
                         ui.painter().image(thumb.id(), rect, Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                         ui.painter().rect_stroke(rect, 0, Stroke::new(1.0, colors::BORDER_SUBTLE), egui::StrokeKind::Inside);
                     }
 
+                    ui.add_space(8.0);
+
                     ui.vertical(|ui| {
                         ui.monospace(format!("Path: {}", path.display()));
-                        ui.add_space(2.0);
+                        ui.add_space(6.0);
 
                         ui.horizontal(|ui| {
                             render_badge(ui, &format!("{} frames", self.enc_detected_frames), colors::BG_ELEVATED, colors::ACCENT_CYAN);
@@ -1140,25 +1157,25 @@ impl HapStudioApp {
                 });
             } else {
                 ui.vertical_centered(|ui| {
-                    ui.add_space(10.0);
+                    ui.add_space(12.0);
                     ui.label(RichText::new("Drop an image folder here, or click 'Choose Folder...'").color(colors::TEXT_MUTED));
-                    ui.add_space(10.0);
+                    ui.add_space(12.0);
                 });
             }
         });
 
-        ui.add_space(8.0);
+        ui.add_space(14.0);
 
         // --- PRESETS ---
         let presets_frame = egui::Frame::canvas(ui.style())
             .fill(colors::BG_CARD)
             .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
             .corner_radius(CornerRadius::same(6))
-            .inner_margin(egui::Margin::same(12));
+            .inner_margin(egui::Margin::same(18));
 
         presets_frame.show(ui, |ui| {
-            ui.strong(RichText::new("Presets").size(14.0));
-            ui.add_space(6.0);
+            ui.strong(RichText::new("Presets").size(15.0));
+            ui.add_space(8.0);
 
             ui.horizontal_wrapped(|ui| {
                 let presets = [
@@ -1175,7 +1192,8 @@ impl HapStudioApp {
                     let bg = if is_sel { colors::BG_CARD_HOVER } else { colors::BG_ELEVATED };
                     let stroke = if is_sel { Stroke::new(1.5, colors::ACCENT_CYAN) } else { Stroke::new(1.0, colors::BORDER_SUBTLE) };
 
-                    let btn = egui::Button::new(RichText::new(preset.name()).color(if is_sel { Color32::WHITE } else { colors::TEXT_MUTED }).strong())
+                    let btn = egui::Button::new(RichText::new(preset.name()).size(13.5).color(if is_sel { Color32::WHITE } else { colors::TEXT_MUTED }).strong())
+                        .min_size(Vec2::new(110.0, 36.0))
                         .fill(bg)
                         .stroke(stroke)
                         .corner_radius(CornerRadius::same(6));
@@ -1186,24 +1204,24 @@ impl HapStudioApp {
                 }
             });
 
-            ui.add_space(4.0);
-            ui.label(RichText::new(self.enc_preset.description()).color(colors::TEXT_MUTED).size(12.0));
+            ui.add_space(6.0);
+            ui.label(RichText::new(self.enc_preset.description()).color(colors::TEXT_MUTED).size(12.5));
         });
 
-        ui.add_space(8.0);
+        ui.add_space(14.0);
 
         // --- CODEC SETTINGS ---
         let settings_frame = egui::Frame::canvas(ui.style())
             .fill(colors::BG_CARD)
             .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
             .corner_radius(CornerRadius::same(6))
-            .inner_margin(egui::Margin::same(12));
+            .inner_margin(egui::Margin::same(18));
 
         settings_frame.show(ui, |ui| {
-            ui.strong(RichText::new("Codec Settings").size(14.0));
-            ui.add_space(6.0);
+            ui.strong(RichText::new("Codec Settings").size(15.0));
+            ui.add_space(10.0);
 
-            egui::Grid::new("enc_params_grid").spacing([24.0, 8.0]).show(ui, |ui| {
+            egui::Grid::new("enc_params_grid").spacing([32.0, 14.0]).show(ui, |ui| {
                 ui.label(RichText::new("Format:").color(colors::TEXT_MUTED));
                 egui::ComboBox::from_id_salt("flavour_combo")
                     .selected_text(self.enc_format.name())
@@ -1226,7 +1244,7 @@ impl HapStudioApp {
                 ui.horizontal(|ui| {
                     ui.add(egui::DragValue::new(&mut self.enc_fps).speed(0.1).range(1.0..=120.0));
                     for f in [24.0, 25.0, 29.97, 30.0, 50.0, 60.0] {
-                        if ui.selectable_label((self.enc_fps - f).abs() < 0.01, format!("{:.0}", f)).clicked() {
+                        if ui.add(egui::Button::new(format!("{:.0}", f)).min_size(Vec2::new(38.0, 30.0))).clicked() {
                             self.enc_fps = f;
                         }
                     }
@@ -1245,6 +1263,7 @@ impl HapStudioApp {
                             ui.selectable_value(&mut self.enc_chunks, 16, "16 Chunks");
                         });
 
+                    ui.add_space(8.0);
                     ui.checkbox(&mut self.enc_snappy, "Snappy Compression");
                 });
                 ui.end_row();
@@ -1257,7 +1276,7 @@ impl HapStudioApp {
                         ui.label(RichText::new("Not set").color(colors::TEXT_FAINT));
                     }
 
-                    if ui.button("Change...").clicked() {
+                    if ui.add(egui::Button::new("Change...").min_size(Vec2::new(96.0, 30.0))).clicked() {
                         if let Some(dest) = rfd::FileDialog::new()
                             .add_filter("QuickTime Movie", &["mov"])
                             .save_file()
@@ -1270,7 +1289,7 @@ impl HapStudioApp {
             });
         });
 
-        ui.add_space(10.0);
+        ui.add_space(16.0);
 
         // --- ENCODE ACTIONS ---
         let can_start = self.enc_input_path.is_some()
@@ -1280,6 +1299,7 @@ impl HapStudioApp {
 
         ui.horizontal(|ui| {
             let encode_btn = egui::Button::new(RichText::new("Start Encoding").size(15.0).strong())
+                .min_size(Vec2::new(160.0, 40.0))
                 .fill(colors::ACCENT_BLUE)
                 .corner_radius(CornerRadius::same(6));
 
@@ -1306,7 +1326,9 @@ impl HapStudioApp {
             }
 
             if self.enc_rx.is_some() {
-                if ui.button(RichText::new("Cancel").color(colors::ACCENT_RED)).clicked() {
+                let cancel_btn = egui::Button::new(RichText::new("Cancel").size(15.0).color(colors::ACCENT_RED))
+                    .min_size(Vec2::new(100.0, 40.0));
+                if ui.add(cancel_btn).clicked() {
                     if let Some(ref cancel) = self.enc_cancel {
                         cancel.store(true, Ordering::Relaxed);
                     }
@@ -1318,12 +1340,12 @@ impl HapStudioApp {
         let mut load_into_player: Option<PathBuf> = None;
 
         if let Some(ref status) = self.enc_status {
-            ui.add_space(8.0);
+            ui.add_space(12.0);
             let progress_frame = egui::Frame::canvas(ui.style())
                 .fill(colors::BG_CARD)
                 .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
                 .corner_radius(CornerRadius::same(6))
-                .inner_margin(egui::Margin::same(12));
+                .inner_margin(egui::Margin::same(18));
 
             progress_frame.show(ui, |ui| {
                 match status {
@@ -1337,7 +1359,7 @@ impl HapStudioApp {
                                 ui.label(RichText::new(format!("{:.1} FPS", fps)).color(colors::ACCENT_CYAN).strong());
                             });
                         });
-                        ui.add_space(4.0);
+                        ui.add_space(6.0);
                         ui.add(egui::ProgressBar::new(*percent / 100.0).show_percentage());
 
                         if let Some(start) = self.enc_start_time {
@@ -1347,19 +1369,20 @@ impl HapStudioApp {
                             } else {
                                 0.0
                             };
+                            ui.add_space(4.0);
                             ui.label(RichText::new(format!("Elapsed: {:.1}s • ETA: {:.1}s", elapsed, remaining)).color(colors::TEXT_FAINT));
                         }
                     }
                     WorkerProgress::Finished { message } => {
                         ui.label(RichText::new(message).color(colors::ACCENT_GREEN).strong());
 
-                        ui.add_space(6.0);
+                        ui.add_space(10.0);
                         ui.horizontal(|ui| {
                             if let Some(ref mov) = self.enc_last_successful_mov {
-                                if ui.button(RichText::new("Open in Player").strong().color(colors::ACCENT_CYAN)).clicked() {
+                                if ui.add(egui::Button::new(RichText::new("Open in Player").strong().color(colors::ACCENT_CYAN)).min_size(Vec2::new(130.0, 36.0))).clicked() {
                                     load_into_player = Some(mov.clone());
                                 }
-                                if ui.button("Show in Explorer").clicked() {
+                                if ui.add(egui::Button::new("Show in Explorer").min_size(Vec2::new(130.0, 36.0))).clicked() {
                                     reveal_in_file_manager(mov);
                                 }
                             }
@@ -1384,18 +1407,18 @@ impl HapStudioApp {
 // ---------------------------------------------------------------------------
 impl HapStudioApp {
     fn show_diagnostics_tab(&mut self, ui: &mut egui::Ui) {
-        ui.heading(RichText::new("System & Diagnostics").size(18.0));
+        ui.heading(RichText::new("System & Diagnostics").size(19.0));
         ui.label(RichText::new("GPU capabilities, threading, and runtime event log.").color(colors::TEXT_MUTED));
-        ui.add_space(8.0);
+        ui.add_space(10.0);
 
         let diag_frame = egui::Frame::canvas(ui.style())
             .fill(colors::BG_CARD)
             .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
             .corner_radius(CornerRadius::same(6))
-            .inner_margin(egui::Margin::same(12));
+            .inner_margin(egui::Margin::same(18));
 
         diag_frame.show(ui, |ui| {
-            egui::Grid::new("diag_grid").striped(true).spacing([24.0, 8.0]).show(ui, |ui| {
+            egui::Grid::new("diag_grid").striped(true).spacing([32.0, 12.0]).show(ui, |ui| {
                 ui.strong("GPU Adapter:");
                 ui.label(&self.gpu_adapter_name);
                 ui.end_row();
@@ -1422,24 +1445,24 @@ impl HapStudioApp {
             });
         });
 
-        ui.add_space(10.0);
+        ui.add_space(14.0);
 
         // Activity Log Card
         let log_frame = egui::Frame::canvas(ui.style())
             .fill(colors::BG_CARD)
             .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
             .corner_radius(CornerRadius::same(6))
-            .inner_margin(egui::Margin::same(12));
+            .inner_margin(egui::Margin::same(18));
 
         log_frame.show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.strong(RichText::new("Activity Log").size(14.0));
+                ui.strong(RichText::new("Activity Log").size(15.0));
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Clear").clicked() {
+                    if ui.add(egui::Button::new("Clear").min_size(Vec2::new(80.0, 30.0))).clicked() {
                         self.system_logs.clear();
                     }
-                    if ui.button("Copy Logs").clicked() {
+                    if ui.add(egui::Button::new("Copy Logs").min_size(Vec2::new(110.0, 30.0))).clicked() {
                         let text = self.system_logs.join("\n");
                         ui.copy_text(text);
                         self.notify("Logs copied to clipboard", colors::ACCENT_CYAN);
@@ -1447,14 +1470,14 @@ impl HapStudioApp {
                 });
             });
 
-            ui.add_space(4.0);
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.log_search).hint_text("Filter logs..."));
-                if !self.log_search.is_empty() && ui.button("Clear filter").clicked() {
+                ui.add_sized(Vec2::new(260.0, 32.0), egui::TextEdit::singleline(&mut self.log_search).hint_text("Filter logs..."));
+                if !self.log_search.is_empty() && ui.add(egui::Button::new("Clear filter").min_size(Vec2::new(90.0, 32.0))).clicked() {
                     self.log_search.clear();
                 }
             });
-            ui.add_space(6.0);
+            ui.add_space(8.0);
 
             egui::ScrollArea::vertical()
                 .max_height(320.0)

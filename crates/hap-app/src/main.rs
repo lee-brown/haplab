@@ -29,8 +29,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Otherwise, launch the full interactive graphical user interface
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([960.0, 720.0])
-            .with_min_inner_size([640.0, 480.0])
+            .with_inner_size([1040.0, 780.0])
+            .with_min_inner_size([720.0, 520.0])
             .with_title("HAP Video Studio")
             .with_drag_and_drop(true),
         ..Default::default()

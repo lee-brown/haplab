@@ -61,6 +61,17 @@ pub fn apply_studio_theme(ctx: &egui::Context) {
     visuals.window_corner_radius = CornerRadius::same(8);
 
     ctx.set_visuals(visuals);
+
+    // Global spacing and padding for comfortable, breathable ergonomics
+    for theme in [egui::Theme::Dark, egui::Theme::Light] {
+        ctx.style_mut_of(theme, |style| {
+            style.spacing.button_padding = Vec2::new(14.0, 7.0);
+            style.spacing.item_spacing = Vec2::new(12.0, 10.0);
+            style.spacing.interact_size.y = 32.0;
+            style.spacing.combo_width = 180.0;
+            style.spacing.slider_rail_height = 8.0;
+        });
+    }
 }
 
 /// Renders a subtle checkerboard pattern on the canvas for transparent textures.
@@ -88,11 +99,11 @@ pub fn paint_transparency_checkerboard(painter: &Painter, rect: Rect) {
 pub fn render_badge(ui: &mut egui::Ui, text: &str, bg: Color32, fg: Color32) {
     let font_id = egui::TextStyle::Monospace.resolve(ui.style());
     let galley = ui.painter().layout_no_wrap(text.to_string(), font_id, fg);
-    let padding = Vec2::new(8.0, 3.0);
+    let padding = Vec2::new(10.0, 4.0);
     let desired_size = galley.size() + padding * 2.0;
     let (rect, _response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
 
-    ui.painter().rect_filled(rect, CornerRadius::same(4), bg);
+    ui.painter().rect_filled(rect, CornerRadius::same(5), bg);
     let text_pos = rect.min + padding;
     ui.painter().galley(text_pos, galley, fg);
 }
