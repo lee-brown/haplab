@@ -51,23 +51,23 @@ fn generate_pattern(w: usize, h: usize) -> Vec<u8> {
 fn rate_decode_fps(fps: f64, is_4k: bool) -> &'static str {
     if is_4k {
         if fps >= 120.0 {
-            "Elite (4K 120FPS Multi-Screen Ready)"
+            "Elite (120+ FPS)"
         } else if fps >= 60.0 {
-            "Broadcast Ready (Smooth 4K 60FPS)"
+            "Broadcast (60+ FPS)"
         } else if fps >= 30.0 {
-            "Standard (4K 30FPS Playback)"
+            "Smooth (30+ FPS)"
         } else {
             "Entry-Level"
         }
     } else {
         if fps >= 240.0 {
-            "Elite (8K 60FPS / Ultra-HFR Capable)"
+            "Elite (240+ FPS)"
         } else if fps >= 120.0 {
-            "High Performance (1080p 120FPS Ready)"
+            "High (120+ FPS)"
         } else if fps >= 60.0 {
-            "Standard (1080p 60FPS)"
+            "Smooth (60+ FPS)"
         } else {
-            "Low"
+            "Standard"
         }
     }
 }
@@ -86,7 +86,7 @@ pub fn spawn_benchmark_worker(
         if cancel_flag.load(Ordering::Relaxed) {
             return;
         }
-        let test1_name = "1080p Hap Q CPU Decode".to_string();
+        let test1_name = "1080p Hap Q Decode".to_string();
         let _ = progress_tx.send(BenchmarkProgress::Started {
             test_name: test1_name.clone(),
         });
@@ -128,7 +128,7 @@ pub fn spawn_benchmark_worker(
 
         let score1 = BenchmarkScore {
             test_name: test1_name,
-            resolution: "1920 × 1080 (Full HD)".into(),
+            resolution: "1920 × 1080".into(),
             frame_count: frames_1080,
             elapsed_secs: el1,
             fps: fps1,
@@ -187,7 +187,7 @@ pub fn spawn_benchmark_worker(
 
         let score2 = BenchmarkScore {
             test_name: test2_name,
-            resolution: "3840 × 2160 (4K UHD)".into(),
+            resolution: "3840 × 2160".into(),
             frame_count: frames_4k,
             elapsed_secs: el2,
             fps: fps2,
@@ -204,7 +204,7 @@ pub fn spawn_benchmark_worker(
         if cancel_flag.load(Ordering::Relaxed) {
             return;
         }
-        let test3_name = "1080p Real-time Encode (Draft)".to_string();
+        let test3_name = "1080p Ingest Encode".to_string();
         let _ = progress_tx.send(BenchmarkProgress::Started {
             test_name: test3_name.clone(),
         });
@@ -244,16 +244,16 @@ pub fn spawn_benchmark_worker(
         let bw3 = (fps3 * bytes_per_frame_1080) / 1_000_000_000.0;
 
         let rating3 = if fps3 >= 60.0 {
-            "Broadcast Ingest Ready (60+ FPS Real-time)"
+            "Broadcast (60+ FPS)"
         } else if fps3 >= 30.0 {
-            "Real-Time Ready (30+ FPS)"
+            "Real-Time (30+ FPS)"
         } else {
             "Near Real-Time"
         };
 
         let score3 = BenchmarkScore {
             test_name: test3_name,
-            resolution: "1920 × 1080 (Full HD)".into(),
+            resolution: "1920 × 1080".into(),
             frame_count: frames_enc,
             elapsed_secs: el3,
             fps: fps3,
@@ -270,7 +270,7 @@ pub fn spawn_benchmark_worker(
         if cancel_flag.load(Ordering::Relaxed) {
             return;
         }
-        let test4_name = "Compressed Packet De-Snappy & Texture Parse".to_string();
+        let test4_name = "Texture Streaming".to_string();
         let _ = progress_tx.send(BenchmarkProgress::Started {
             test_name: test4_name.clone(),
         });
@@ -296,13 +296,13 @@ pub fn spawn_benchmark_worker(
         let ms4 = (el4 * 1000.0) / frames_tex as f64;
         let score4 = BenchmarkScore {
             test_name: test4_name,
-            resolution: "1920 × 1080 (Hap Q)".into(),
+            resolution: "1920 × 1080".into(),
             frame_count: frames_tex,
             elapsed_secs: el4,
             fps: fps4,
             frame_time_ms: ms4,
             bandwidth_gbps: (fps4 * (pkt_1080.len() as f64)) / 1_000_000_000.0,
-            performance_rating: "Ultra High Bandwidth (>500 FPS)",
+            performance_rating: "Ultra (>500 FPS)",
         };
         scores.push(score4.clone());
         let _ = progress_tx.send(BenchmarkProgress::TestCompleted(score4));

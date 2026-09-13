@@ -32,7 +32,7 @@ pub fn register_mov_association() -> Result<String, String> {
 
         // 4. Register in Applications
         let _ = std::process::Command::new("reg")
-            .args(&["add", r"HKCU\Software\Classes\Applications\hap.exe\shell\open\command", "/ve", "/d", &cmd_str, "/f"])
+            .args(&["add", r"HKCU\Software\Classes\Applications\haplab.exe\shell\open\command", "/ve", "/d", &cmd_str, "/f"])
             .creation_flags(CREATE_NO_WINDOW)
             .status();
 

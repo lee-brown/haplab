@@ -37,12 +37,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Otherwise, launch the full interactive graphical user interface
+    let icon_data = {
+        let icon_bytes = include_bytes!("../../../assets/icon_256.png");
+        image::load_from_memory(icon_bytes)
+            .ok()
+            .map(|img| {
+                let rgba = img.to_rgba8();
+                let (width, height) = rgba.dimensions();
+                egui::IconData {
+                    rgba: rgba.into_raw(),
+                    width,
+                    height,
+                }
+            })
+    };
+
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([1040.0, 780.0])
+        .with_min_inner_size([720.0, 520.0])
+        .with_title("HapLab")
+        .with_drag_and_drop(true);
+
+    if let Some(icon) = icon_data {
+        viewport = viewport.with_icon(icon);
+    }
+
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1040.0, 780.0])
-            .with_min_inner_size([720.0, 520.0])
-            .with_title("HapLab")
-            .with_drag_and_drop(true),
+        viewport,
         ..Default::default()
     };
 

@@ -7,7 +7,8 @@ use super::theme::{
 use crate::benchmark::{spawn_benchmark_worker, BenchmarkProgress, BenchmarkScore};
 use crate::platform::{open_windows_default_apps, register_mov_association};
 use crate::worker::{
-    spawn_encode_worker, spawn_export_worker, EncodeJobConfig, WorkerProgress,
+    is_video_container, probe_video_input, spawn_encode_worker, spawn_export_worker,
+    EncodeJobConfig, WorkerProgress,
 };
 use crossbeam_channel::Receiver;
 use eframe::egui::{
@@ -152,6 +153,7 @@ pub struct HapLabApp {
     gpu_supports_bc: bool,
     system_logs: Vec<String>,
     log_search: String,
+    app_icon_texture: Option<egui::TextureHandle>,
 }
 
 impl Default for HapLabApp {
@@ -242,6 +244,7 @@ impl Default for HapLabApp {
             gpu_supports_bc: supports_bc,
             system_logs: Vec::new(),
             log_search: String::new(),
+            app_icon_texture: None,
         };
 
         app.log("HapLab initialized.");
@@ -457,7 +460,7 @@ impl HapLabApp {
     }
 
     fn scan_encoder_input(&mut self, ctx: &egui::Context) {
-        if let Some(ref path) = self.enc_input_path {
+        if let Some(path) = self.enc_input_path.clone() {
             let mut count = 0;
             let mut first_file = None;
             let mut last_file = None;
@@ -485,9 +488,45 @@ impl HapLabApp {
                     last_file = files.last().cloned();
                 }
             } else if path.is_file() {
-                count = 1;
-                first_file = Some(path.clone());
-                last_file = Some(path.clone());
+                if is_video_container(&path) {
+                    match probe_video_input(&path) {
+                        Ok(probe) => {
+                            count = probe.frame_count;
+                            first_file = Some(path.clone());
+                            last_file = Some(path.clone());
+                            self.enc_detected_w = probe.width as u32;
+                            self.enc_detected_h = probe.height as u32;
+                            self.enc_fps = probe.fps;
+                            self.log(&format!(
+                                "Video detected: {}x{} @ {:.2} fps, {} frames ({:.2}s)",
+                                probe.width, probe.height, probe.fps, probe.frame_count, probe.duration_secs
+                            ));
+
+                            if let Some((tw, th, rgba)) = probe.thumbnail_rgba {
+                                let color_img = egui::ColorImage::from_rgba_unmultiplied(
+                                    [tw as usize, th as usize],
+                                    &rgba,
+                                );
+                                self.enc_thumbnail_texture = Some(ctx.load_texture(
+                                    "enc-thumb",
+                                    color_img,
+                                    TextureOptions::LINEAR,
+                                ));
+                            }
+                        }
+                        Err(err) => {
+                            self.notify(err.clone(), colors::ACCENT_AMBER);
+                            self.log(&format!("Video probe note: {}", err));
+                            count = 1;
+                            first_file = Some(path.clone());
+                            last_file = Some(path.clone());
+                        }
+                    }
+                } else {
+                    count = 1;
+                    first_file = Some(path.clone());
+                    last_file = Some(path.clone());
+                }
             }
 
             self.enc_detected_frames = count;
@@ -500,23 +539,25 @@ impl HapLabApp {
                 .and_then(|p| p.file_name())
                 .map(|f| f.to_string_lossy().to_string());
 
-            if let Some(ref first) = first_file {
-                if let Ok(img) = image::open(first) {
-                    let (w, h) = img.dimensions();
-                    self.enc_detected_w = w;
-                    self.enc_detected_h = h;
+            if self.enc_thumbnail_texture.is_none() {
+                if let Some(ref first) = first_file {
+                    if let Ok(img) = image::open(first) {
+                        let (w, h) = img.dimensions();
+                        self.enc_detected_w = w;
+                        self.enc_detected_h = h;
 
-                    let thumb = img.thumbnail(180, 180).to_rgba8();
-                    let (tw, th) = thumb.dimensions();
-                    let color_img = egui::ColorImage::from_rgba_unmultiplied(
-                        [tw as usize, th as usize],
-                        &thumb,
-                    );
-                    self.enc_thumbnail_texture = Some(ctx.load_texture(
-                        "enc-thumb",
-                        color_img,
-                        TextureOptions::LINEAR,
-                    ));
+                        let thumb = img.thumbnail(180, 180).to_rgba8();
+                        let (tw, th) = thumb.dimensions();
+                        let color_img = egui::ColorImage::from_rgba_unmultiplied(
+                            [tw as usize, th as usize],
+                            &thumb,
+                        );
+                        self.enc_thumbnail_texture = Some(ctx.load_texture(
+                            "enc-thumb",
+                            color_img,
+                            TextureOptions::LINEAR,
+                        ));
+                    }
                 }
             }
 
@@ -749,7 +790,29 @@ impl eframe::App for HapLabApp {
             ui.vertical(|ui| {
                 // --- TOP TITLE BAR ---
                 ui.add_space(2.0);
+                if self.app_icon_texture.is_none() {
+                    if let Ok(img) = image::load_from_memory(include_bytes!("../../../../assets/icon_256.png")) {
+                        let rgba = img.to_rgba8();
+                        let color_img = egui::ColorImage::from_rgba_unmultiplied(
+                            [rgba.width() as usize, rgba.height() as usize],
+                            &rgba,
+                        );
+                        self.app_icon_texture = Some(ui.ctx().load_texture("app-icon", color_img, TextureOptions::LINEAR));
+                    }
+                }
+
                 ui.horizontal(|ui| {
+                    if let Some(ref icon) = self.app_icon_texture {
+                        let (rect, _response) = ui.allocate_exact_size(Vec2::new(26.0, 26.0), egui::Sense::hover());
+                        ui.painter().image(
+                            icon.id(),
+                            rect,
+                            Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                            Color32::WHITE,
+                        );
+                        ui.add_space(4.0);
+                    }
+
                     ui.heading(
                         RichText::new("HapLab")
                             .size(20.0)
@@ -1877,59 +1940,61 @@ impl HapLabApp {
             .inner_margin(egui::Margin::same(18));
 
         ctrl_frame.show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
                     ui.strong(RichText::new("System Hardware Configuration").size(14.5));
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        render_badge(ui, &format!("{} Rayon Threads", rayon::current_num_threads()), colors::BG_ELEVATED, colors::ACCENT_CYAN);
-                        render_badge(ui, &self.gpu_adapter_name, colors::BG_ELEVATED, colors::TEXT_PRIMARY);
-                        if self.gpu_supports_bc {
-                            render_badge(ui, "BC Hardware Textures", Color32::from_rgb(16, 40, 25), colors::ACCENT_GREEN);
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if self.bench_is_running {
+                            let cancel_btn = egui::Button::new(RichText::new("Cancel Benchmark").size(13.5).strong().color(colors::ACCENT_RED))
+                                .min_size(Vec2::new(140.0, 32.0));
+                            if ui.add(cancel_btn).clicked() {
+                                if let Some(ref cancel) = self.bench_cancel {
+                                    cancel.store(true, Ordering::Relaxed);
+                                }
+                                self.bench_is_running = false;
+                                self.bench_current_test = None;
+                                self.log("Benchmark cancelled by user.");
+                            }
                         } else {
-                            render_badge(ui, "CPU Fallback", Color32::from_rgb(45, 38, 15), colors::TEXT_MUTED);
+                            let run_btn = egui::Button::new(RichText::new("▶ Run Benchmark Suite").size(13.5).strong())
+                                .min_size(Vec2::new(170.0, 32.0))
+                                .fill(colors::ACCENT_BLUE)
+                                .corner_radius(CornerRadius::same(6));
+
+                            if ui.add(run_btn).clicked() {
+                                let cancel_flag = Arc::new(AtomicBool::new(false));
+                                let (tx, rx) = crossbeam_channel::unbounded();
+                                self.bench_cancel = Some(cancel_flag.clone());
+                                self.bench_rx = Some(rx);
+                                self.bench_is_running = true;
+                                self.bench_scores.clear();
+                                self.bench_current_test = Some("Initializing benchmark...".to_string());
+                                self.bench_current_step = 0;
+                                self.bench_total_steps = 1;
+                                self.bench_current_fps = 0.0;
+                                self.log("Hardware benchmark suite initiated.");
+                                spawn_benchmark_worker(cancel_flag, tx);
+                            }
+                        }
+
+                        if !self.bench_scores.is_empty() && !self.bench_is_running {
+                            if ui.add(egui::Button::new("Clear Results").min_size(Vec2::new(90.0, 32.0))).clicked() {
+                                self.bench_scores.clear();
+                            }
                         }
                     });
                 });
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if self.bench_is_running {
-                        let cancel_btn = egui::Button::new(RichText::new("Cancel Benchmark").size(14.0).strong().color(colors::ACCENT_RED))
-                            .min_size(Vec2::new(150.0, 36.0));
-                        if ui.add(cancel_btn).clicked() {
-                            if let Some(ref cancel) = self.bench_cancel {
-                                cancel.store(true, Ordering::Relaxed);
-                            }
-                            self.bench_is_running = false;
-                            self.bench_current_test = None;
-                            self.log("Benchmark cancelled by user.");
-                        }
+                ui.add_space(8.0);
+
+                ui.horizontal_wrapped(|ui| {
+                    render_badge(ui, &format!("{} Rayon Threads", rayon::current_num_threads()), colors::BG_ELEVATED, colors::ACCENT_CYAN);
+                    render_badge(ui, &self.gpu_adapter_name, colors::BG_ELEVATED, colors::TEXT_PRIMARY);
+                    if self.gpu_supports_bc {
+                        render_badge(ui, "BC Hardware Textures", Color32::from_rgb(16, 40, 25), colors::ACCENT_GREEN);
                     } else {
-                        let run_btn = egui::Button::new(RichText::new("Run Benchmark Suite").size(14.0).strong())
-                            .min_size(Vec2::new(170.0, 36.0))
-                            .fill(colors::ACCENT_BLUE)
-                            .corner_radius(CornerRadius::same(6));
-
-                        if ui.add(run_btn).clicked() {
-                            let cancel_flag = Arc::new(AtomicBool::new(false));
-                            let (tx, rx) = crossbeam_channel::unbounded();
-                            self.bench_cancel = Some(cancel_flag.clone());
-                            self.bench_rx = Some(rx);
-                            self.bench_is_running = true;
-                            self.bench_scores.clear();
-                            self.bench_current_test = Some("Initializing benchmark...".to_string());
-                            self.bench_current_step = 0;
-                            self.bench_total_steps = 1;
-                            self.bench_current_fps = 0.0;
-                            self.log("Hardware benchmark suite initiated.");
-                            spawn_benchmark_worker(cancel_flag, tx);
-                        }
-                    }
-
-                    if !self.bench_scores.is_empty() && !self.bench_is_running {
-                        if ui.add(egui::Button::new("Clear Results").min_size(Vec2::new(100.0, 36.0))).clicked() {
-                            self.bench_scores.clear();
-                        }
+                        render_badge(ui, "CPU Fallback", Color32::from_rgb(45, 38, 15), colors::TEXT_MUTED);
                     }
                 });
             });
@@ -2007,41 +2072,47 @@ impl HapLabApp {
                     ui.add_space(16.0);
                 });
             } else {
-                egui::Grid::new("bench_scorecard_grid")
-                    .striped(true)
-                    .spacing([24.0, 10.0])
+                egui::ScrollArea::horizontal()
+                    .id_salt("bench_scorecard_scroll")
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        // Table Headers
-                        ui.label(RichText::new("Benchmark Test").strong().color(colors::TEXT_PRIMARY));
-                        ui.label(RichText::new("Resolution").strong().color(colors::TEXT_PRIMARY));
-                        ui.label(RichText::new("Throughput (FPS)").strong().color(colors::TEXT_PRIMARY));
-                        ui.label(RichText::new("Frame Latency").strong().color(colors::TEXT_PRIMARY));
-                        ui.label(RichText::new("Bandwidth").strong().color(colors::TEXT_PRIMARY));
-                        ui.label(RichText::new("Production Capability").strong().color(colors::TEXT_PRIMARY));
-                        ui.end_row();
+                        egui::Grid::new("bench_scorecard_grid")
+                            .striped(true)
+                            .spacing([18.0, 8.0])
+                            .min_col_width(70.0)
+                            .show(ui, |ui| {
+                                // Table Headers
+                                ui.label(RichText::new("Benchmark Test").strong().color(colors::TEXT_PRIMARY));
+                                ui.label(RichText::new("Resolution").strong().color(colors::TEXT_PRIMARY));
+                                ui.label(RichText::new("Throughput").strong().color(colors::TEXT_PRIMARY));
+                                ui.label(RichText::new("Latency").strong().color(colors::TEXT_PRIMARY));
+                                ui.label(RichText::new("Bandwidth").strong().color(colors::TEXT_PRIMARY));
+                                ui.label(RichText::new("Capability Rating").strong().color(colors::TEXT_PRIMARY));
+                                ui.end_row();
 
-                        for score in &self.bench_scores {
-                            ui.label(RichText::new(&score.test_name).strong());
-                            ui.label(RichText::new(&score.resolution).color(colors::TEXT_MUTED))
-                                .on_hover_text(format!("{} frames measured in {:.2}s", score.frame_count, score.elapsed_secs));
+                                for score in &self.bench_scores {
+                                    ui.label(RichText::new(&score.test_name).strong());
+                                    ui.label(RichText::new(&score.resolution).color(colors::TEXT_MUTED))
+                                        .on_hover_text(format!("{} frames measured in {:.2}s", score.frame_count, score.elapsed_secs));
 
-                            let fps_color = if score.fps >= 120.0 {
-                                colors::ACCENT_GREEN
-                            } else if score.fps >= 60.0 {
-                                colors::ACCENT_CYAN
-                            } else if score.fps >= 30.0 {
-                                colors::ACCENT_AMBER
-                            } else {
-                                colors::ACCENT_RED
-                            };
-                            ui.label(RichText::new(format!("{:.1} FPS", score.fps)).color(fps_color).strong());
+                                    let fps_color = if score.fps >= 120.0 {
+                                        colors::ACCENT_GREEN
+                                    } else if score.fps >= 60.0 {
+                                        colors::ACCENT_CYAN
+                                    } else if score.fps >= 30.0 {
+                                        colors::ACCENT_AMBER
+                                    } else {
+                                        colors::ACCENT_RED
+                                    };
+                                    ui.label(RichText::new(format!("{:.1} FPS", score.fps)).color(fps_color).strong());
 
-                            ui.label(format!("{:.2} ms", score.frame_time_ms));
-                            ui.label(format!("{:.2} GB/s", score.bandwidth_gbps));
+                                    ui.label(format!("{:.2} ms", score.frame_time_ms));
+                                    ui.label(format!("{:.2} GB/s", score.bandwidth_gbps));
 
-                            render_badge(ui, score.performance_rating, colors::BG_ELEVATED, colors::ACCENT_GREEN);
-                            ui.end_row();
-                        }
+                                    render_badge(ui, score.performance_rating, colors::BG_ELEVATED, colors::ACCENT_GREEN);
+                                    ui.end_row();
+                                }
+                            });
                     });
             }
         });
@@ -2056,7 +2127,7 @@ impl HapLabApp {
             .inner_margin(egui::Margin::same(18));
 
         guide_frame.show(ui, |ui| {
-            ui.strong(RichText::new("Media Server Performance Thresholds & Guidelines").size(14.5));
+            ui.strong(RichText::new("Media Server Performance Guidelines").size(14.5));
             ui.add_space(8.0);
             ui.label(RichText::new("• 1080p60 Real-Time: Requires frame decode time <= 16.6 ms (>= 60 FPS). Hap 1 / Hap Q typically achieves 300-800 FPS on modern multi-core CPUs.").color(colors::TEXT_MUTED));
             ui.add_space(4.0);
