@@ -39,6 +39,8 @@ pub fn ycocg_to_rgb(y: u8, co: u8, cg: u8) -> (u8, u8, u8) {
     )
 }
 
+use rayon::prelude::*;
+
 /// Transform an entire RGBA8 image buffer (dimensions multiple of 4) into the
 /// scaled YCoCg buffer ready for DXT5 compression.
 ///
@@ -57,64 +59,65 @@ pub fn rgba_to_scaled_ycocg_dxt5_input(
     assert_eq!(out.len(), width * height * 4);
 
     let blocks_x = width / 4;
-    let blocks_y = height / 4;
+    let block_row_bytes = width * 4 * 4;
 
-    for by in 0..blocks_y {
-        for bx in 0..blocks_x {
-            // Step 1: Collect pixels of the 4x4 block and compute max chroma deviation
-            let mut ycocg_pixels = [(0u8, 0u8, 0u8); 16];
-            let mut max_dev = 0i32;
+    out.par_chunks_mut(block_row_bytes)
+        .enumerate()
+        .for_each(|(by, out_row)| {
+            let row_rgba = &rgba[by * block_row_bytes..(by + 1) * block_row_bytes];
+            for bx in 0..blocks_x {
+                // Step 1: Collect pixels of the 4x4 block and compute max chroma deviation
+                let mut ycocg_pixels = [(0u8, 0u8, 0u8); 16];
+                let mut max_dev = 0i32;
 
-            for py in 0..4 {
-                for px in 0..4 {
-                    let x = bx * 4 + px;
-                    let y = by * 4 + py;
-                    let src_idx = (y * width + x) * 4;
-                    let r = rgba[src_idx];
-                    let g = rgba[src_idx + 1];
-                    let b = rgba[src_idx + 2];
+                for py in 0..4 {
+                    for px in 0..4 {
+                        let x = bx * 4 + px;
+                        let src_idx = (py * width + x) * 4;
+                        let r = row_rgba[src_idx];
+                        let g = row_rgba[src_idx + 1];
+                        let b = row_rgba[src_idx + 2];
 
-                    let (lum, co, cg) = rgb_to_ycocg(r, g, b);
-                    let pi = py * 4 + px;
-                    ycocg_pixels[pi] = (lum, co, cg);
+                        let (lum, co, cg) = rgb_to_ycocg(r, g, b);
+                        let pi = py * 4 + px;
+                        ycocg_pixels[pi] = (lum, co, cg);
 
-                    let dev_co = (co as i32 - 128).abs();
-                    let dev_cg = (cg as i32 - 128).abs();
-                    max_dev = max_dev.max(dev_co).max(dev_cg);
+                        let dev_co = (co as i32 - 128).abs();
+                        let dev_cg = (cg as i32 - 128).abs();
+                        max_dev = max_dev.max(dev_co).max(dev_cg);
+                    }
+                }
+
+                // Step 2: Determine per-block scale (1, 2, or 4)
+                let scale = if max_dev <= 31 {
+                    4
+                } else if max_dev <= 63 {
+                    2
+                } else {
+                    1
+                };
+
+                let blue_scale_indicator = ((scale - 1) * 8) as u8;
+
+                // Step 3: Write scaled values to output
+                for py in 0..4 {
+                    for px in 0..4 {
+                        let x = bx * 4 + px;
+                        let dst_idx = (py * width + x) * 4;
+                        let pi = py * 4 + px;
+                        let (lum, co, cg) = ycocg_pixels[pi];
+
+                        let co_scaled = ((co as i32 - 128) * scale + 128).clamp(0, 255) as u8;
+                        let cg_scaled = ((cg as i32 - 128) * scale + 128).clamp(0, 255) as u8;
+
+                        out_row[dst_idx] = co_scaled;               // R -> Co
+                        out_row[dst_idx + 1] = cg_scaled;           // G -> Cg
+                        out_row[dst_idx + 2] = blue_scale_indicator;// B -> Scale
+                        out_row[dst_idx + 3] = lum;                 // A -> Y
+                    }
                 }
             }
-
-            // Step 2: Determine per-block scale (1, 2, or 4)
-            let scale = if max_dev <= 31 {
-                4
-            } else if max_dev <= 63 {
-                2
-            } else {
-                1
-            };
-
-            let blue_scale_indicator = ((scale - 1) * 8) as u8;
-
-            // Step 3: Write scaled values to output
-            for py in 0..4 {
-                for px in 0..4 {
-                    let x = bx * 4 + px;
-                    let y = by * 4 + py;
-                    let dst_idx = (y * width + x) * 4;
-                    let pi = py * 4 + px;
-                    let (lum, co, cg) = ycocg_pixels[pi];
-
-                    let co_scaled = ((co as i32 - 128) * scale + 128).clamp(0, 255) as u8;
-                    let cg_scaled = ((cg as i32 - 128) * scale + 128).clamp(0, 255) as u8;
-
-                    out[dst_idx] = co_scaled;               // R -> Co
-                    out[dst_idx + 1] = cg_scaled;           // G -> Cg
-                    out[dst_idx + 2] = blue_scale_indicator;// B -> Scale
-                    out[dst_idx + 3] = lum;                 // A -> Y
-                }
-            }
-        }
-    }
+        });
 }
 
 /// Transform a decompressed DXT5 buffer (containing scaled YCoCg in RGBA) back to standard RGBA8.
@@ -127,28 +130,31 @@ pub fn scaled_ycocg_dxt5_output_to_rgba(
     assert_eq!(ycocg_dxt5.len(), width * height * 4);
     assert_eq!(out.len(), width * height * 4);
 
-    let count = width * height;
-    for i in 0..count {
-        let idx = i * 4;
-        let co_scaled = ycocg_dxt5[idx] as f32;
-        let cg_scaled = ycocg_dxt5[idx + 1] as f32;
-        let blue = ycocg_dxt5[idx + 2];
-        let lum = ycocg_dxt5[idx + 3] as f32;
+    const CHUNK_SIZE: usize = 4096;
+    out.par_chunks_mut(CHUNK_SIZE)
+        .zip(ycocg_dxt5.par_chunks(CHUNK_SIZE))
+        .for_each(|(out_chunk, in_chunk)| {
+            for (dst, src) in out_chunk.chunks_exact_mut(4).zip(in_chunk.chunks_exact(4)) {
+                let co_scaled = src[0] as f32;
+                let cg_scaled = src[1] as f32;
+                let blue = src[2];
+                let lum = src[3] as f32;
 
-        let scale = ((blue / 8) + 1).max(1) as f32;
+                let scale = ((blue / 8) + 1).max(1) as f32;
 
-        let co = (co_scaled - 128.0) / scale;
-        let cg = (cg_scaled - 128.0) / scale;
+                let co = (co_scaled - 128.0) / scale;
+                let cg = (cg_scaled - 128.0) / scale;
 
-        let r = (lum + co - cg).clamp(0.0, 255.0) as u8;
-        let g = (lum + cg).clamp(0.0, 255.0) as u8;
-        let b = (lum - co - cg).clamp(0.0, 255.0) as u8;
+                let r = (lum + co - cg).clamp(0.0, 255.0) as u8;
+                let g = (lum + cg).clamp(0.0, 255.0) as u8;
+                let b = (lum - co - cg).clamp(0.0, 255.0) as u8;
 
-        out[idx] = r;
-        out[idx + 1] = g;
-        out[idx + 2] = b;
-        out[idx + 3] = 255;
-    }
+                dst[0] = r;
+                dst[1] = g;
+                dst[2] = b;
+                dst[3] = 255;
+            }
+        });
 }
 
 #[cfg(test)]

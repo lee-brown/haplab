@@ -31,26 +31,31 @@ pub fn compress_bc7(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>,
         });
     }
 
+    use rayon::prelude::*;
+
     let blocks_x = width / 4;
     let blocks_y = height / 4;
     let num_blocks = blocks_x * blocks_y;
     let mut out = vec![0u8; num_blocks * 16];
+    let block_row_bytes = blocks_x * 16;
 
-    for by in 0..blocks_y {
-        for bx in 0..blocks_x {
-            let mut px = [[0u8; 4]; 16];
-            for i in 0..16 {
-                let x = bx * 4 + (i % 4);
-                let y = by * 4 + (i / 4);
-                let idx = (y * width + x) * 4;
-                px[i].copy_from_slice(&rgba[idx..idx + 4]);
+    out.par_chunks_mut(block_row_bytes)
+        .enumerate()
+        .for_each(|(by, out_row)| {
+            for bx in 0..blocks_x {
+                let mut px = [[0u8; 4]; 16];
+                for i in 0..16 {
+                    let x = bx * 4 + (i % 4);
+                    let y = by * 4 + (i / 4);
+                    let idx = (y * width + x) * 4;
+                    px[i].copy_from_slice(&rgba[idx..idx + 4]);
+                }
+
+                let block = encode_bc7_block_mode6(&px, 2);
+                let block_offset = bx * 16;
+                out_row[block_offset..block_offset + 16].copy_from_slice(&block);
             }
-
-            let block = encode_bc7_block_mode6(&px, 2);
-            let block_offset = (by * blocks_x + bx) * 16;
-            out[block_offset..block_offset + 16].copy_from_slice(&block);
-        }
-    }
+        });
 
     Ok(out)
 }
