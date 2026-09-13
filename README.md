@@ -46,48 +46,51 @@ Built for real-time video playback, media servers, transcode pipelines, and inte
 ## Workspace Layout
 
 ```
-hap/
+haplab/
 ├── crates/
 │   ├── hap-core/     # Core codecs, Snappy, YCoCg, BC1-BC7, QuickTime container
 │   ├── hap-gpu/      # wgpu compute shaders, GPU encoder, VRAM texture bindings
 │   └── hap-app/      # Standalone binary: CLI and desktop GUI
 ├── Cargo.toml        # Workspace definition
-└── LICENSE-MIT       # MIT License
+└── LICENSE.md        # PolyForm Noncommercial 1.0.0
 ```
 
 ---
 
 ## CLI Usage
 
-The `hap` binary automatically operates in CLI mode when arguments are passed:
+The `haplab` binary automatically operates in CLI mode when arguments are passed:
 
 ### Inspect a HAP MOV file
 ```bash
-hap info -i presentation.mov
+haplab info -i presentation.mov
 ```
 
-### Encode an Image Sequence
+### Encode Videos or Image Sequences
 ```bash
+# Encode MP4/MOV/MKV (H.264, H.265/HEVC, AV1, ProRes) directly to Hap Q
+haplab encode -i input_video.mp4 -o output_hapy.mov --format hapy
+
 # Encode PNG/JPEG/TIFF sequence to Hap Q with 4 chunks and Snappy
-hap encode -i ./renders/ -o output_hapy.mov --format hap-y --fps 60 --chunks 4 --snappy
+haplab encode -i ./renders/ -o output_hapy.mov --format hapy --fps 60 --chunks 4 --snappy
 
 # Encode to Hap R (BC7)
-hap encode -i ./renders/ -o output_hapr.mov --format hapr --fps 30 --chunks 8 --snappy
+haplab encode -i ./renders/ -o output_hapr.mov --format hapr --fps 30 --chunks 8 --snappy
 
 # Encode transparent video (Hap Q Alpha)
-hap encode -i ./transparent_frames/ -o output_hapm.mov --format hap-m --fps 30 --snappy
+haplab encode -i ./transparent_frames/ -o output_hapm.mov --format hapm --fps 30 --snappy
 ```
 
 ### Decode a HAP MOV file to PNG Sequence
 ```bash
-hap decode -i output_hapy.mov -o ./decoded_frames/
+haplab decode -i output_hapy.mov -o ./decoded_frames/
 ```
 
 ---
 
 ## Desktop GUI
 
-Running `hap` without arguments launches the graphical interface:
+Running `haplab` without arguments launches the graphical interface:
 
 - **Player & Inspector**:
   - Transport controls and keyboard shortcuts: `Space` (Play/Pause), `Left`/`Right` (step 1 frame), `Shift + Left`/`Right` (step 10 frames), `Home`/`End` (jump to start/end), `L` (toggle loop).
