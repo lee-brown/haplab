@@ -19,8 +19,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args: Vec<String> = env::args().collect();
 
-    // If CLI arguments were provided, execute in headless command-line mode
+    // If CLI arguments were provided, attach to parent console on Windows and execute headless mode
     if args.len() > 1 {
+        #[cfg(windows)]
+        unsafe {
+            extern "system" {
+                fn AttachConsole(dw_process_id: u32) -> i32;
+            }
+            const ATTACH_PARENT_PROCESS: u32 = 0xFFFF_FFFF;
+            let _ = AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+
         let cli_args = cli::Cli::parse();
         cli::run_cli(cli_args)?;
         return Ok(());
