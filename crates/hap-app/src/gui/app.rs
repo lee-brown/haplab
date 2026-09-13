@@ -121,6 +121,7 @@ pub struct HapLabApp {
     enc_detected_h: u32,
     enc_detected_first_name: Option<String>,
     enc_detected_last_name: Option<String>,
+    enc_detected_codec: Option<String>,
     enc_thumbnail_texture: Option<egui::TextureHandle>,
     enc_preset: EncoderPreset,
     enc_format: HapFormat,
@@ -214,6 +215,7 @@ impl Default for HapLabApp {
             enc_detected_h: 0,
             enc_detected_first_name: None,
             enc_detected_last_name: None,
+            enc_detected_codec: None,
             enc_thumbnail_texture: None,
             enc_preset: EncoderPreset::HapQRecommended,
             enc_format: HapFormat::HapY,
@@ -486,6 +488,7 @@ impl HapLabApp {
                     count = files.len();
                     first_file = files.first().cloned();
                     last_file = files.last().cloned();
+                    self.enc_detected_codec = Some("Image Sequence".to_string());
                 }
             } else if path.is_file() {
                 if is_video_container(&path) {
@@ -497,9 +500,10 @@ impl HapLabApp {
                             self.enc_detected_w = probe.width as u32;
                             self.enc_detected_h = probe.height as u32;
                             self.enc_fps = probe.fps;
+                            self.enc_detected_codec = Some(probe.codec.clone());
                             self.log(&format!(
-                                "Video detected: {}x{} @ {:.2} fps, {} frames ({:.2}s)",
-                                probe.width, probe.height, probe.fps, probe.frame_count, probe.duration_secs
+                                "Video detected [{}]: {}x{} @ {:.2} fps, {} frames ({:.2}s)",
+                                probe.codec, probe.width, probe.height, probe.fps, probe.frame_count, probe.duration_secs
                             ));
 
                             if let Some((tw, th, rgba)) = probe.thumbnail_rgba {
@@ -517,6 +521,7 @@ impl HapLabApp {
                         Err(err) => {
                             self.notify(err.clone(), colors::ACCENT_AMBER);
                             self.log(&format!("Video probe note: {}", err));
+                            self.enc_detected_codec = Some("Video".to_string());
                             count = 1;
                             first_file = Some(path.clone());
                             last_file = Some(path.clone());
@@ -526,6 +531,7 @@ impl HapLabApp {
                     count = 1;
                     first_file = Some(path.clone());
                     last_file = Some(path.clone());
+                    self.enc_detected_codec = Some("Still Image".to_string());
                 }
             }
 
@@ -1521,11 +1527,11 @@ impl HapLabApp {
 
         ui.horizontal(|ui| {
             ui.heading(RichText::new("Video Encoder").size(19.0).color(Color32::WHITE));
-            ui.label(RichText::new("Encode an image sequence to a QuickTime HAP MOV file.").color(colors::TEXT_MUTED));
+            ui.label(RichText::new("Encode video files (H.264, H.265/HEVC, AV1, ProRes) or image sequences to QuickTime HAP MOV.").color(colors::TEXT_MUTED));
         });
         ui.add_space(10.0);
 
-        // --- SOURCE SEQUENCE CARD ---
+        // --- SOURCE MEDIA CARD ---
         let input_frame = egui::Frame::canvas(ui.style())
             .fill(colors::BG_CARD)
             .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
@@ -1534,7 +1540,7 @@ impl HapLabApp {
 
         input_frame.show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.strong(RichText::new("Source Sequence").size(15.0));
+                ui.strong(RichText::new("Source Media").size(15.0));
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.add(egui::Button::new("Choose Folder...").min_size(Vec2::new(125.0, 34.0))).clicked() {
@@ -1543,8 +1549,13 @@ impl HapLabApp {
                             self.scan_encoder_input(&ctx);
                         }
                     }
-                    if ui.add(egui::Button::new("Select File...").min_size(Vec2::new(110.0, 34.0))).clicked() {
-                        if let Some(file) = rfd::FileDialog::new().pick_file() {
+                    if ui.add(egui::Button::new("Select Video / File...").min_size(Vec2::new(140.0, 34.0))).clicked() {
+                        if let Some(file) = rfd::FileDialog::new()
+                            .add_filter("All Supported Media", &["mp4", "mov", "mkv", "avi", "webm", "m4v", "mxf", "ts", "wmv", "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
+                            .add_filter("Common Video Formats (*.mp4, *.mov, *.mkv, *.webm, *.mxf)", &["mp4", "mov", "mkv", "avi", "webm", "m4v", "mxf", "ts", "wmv"])
+                            .add_filter("Image Sequences (*.png, *.tiff, *.jpg, *.webp)", &["png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
+                            .pick_file()
+                        {
                             self.enc_input_path = Some(file);
                             self.scan_encoder_input(&ctx);
                         }
@@ -1570,11 +1581,16 @@ impl HapLabApp {
                         ui.add_space(6.0);
 
                         ui.horizontal(|ui| {
-                            render_badge(ui, &format!("{} frames", self.enc_detected_frames), colors::BG_ELEVATED, colors::ACCENT_CYAN);
+                            if let Some(ref codec) = self.enc_detected_codec {
+                                render_badge(ui, codec, colors::BG_ELEVATED, colors::ACCENT_CYAN);
+                            }
+                            render_badge(ui, &format!("{} frames", self.enc_detected_frames), colors::BG_ELEVATED, colors::TEXT_PRIMARY);
                             render_badge(ui, &format!("{}x{}", self.enc_detected_w, self.enc_detected_h), colors::BG_ELEVATED, colors::TEXT_PRIMARY);
 
                             if let (Some(ref first), Some(ref last)) = (&self.enc_detected_first_name, &self.enc_detected_last_name) {
-                                ui.label(RichText::new(format!("Range: {} ... {}", first, last)).color(colors::TEXT_FAINT));
+                                if first != last {
+                                    ui.label(RichText::new(format!("Range: {} ... {}", first, last)).color(colors::TEXT_FAINT));
+                                }
                             }
                         });
                     });
@@ -1582,7 +1598,7 @@ impl HapLabApp {
             } else {
                 ui.vertical_centered(|ui| {
                     ui.add_space(12.0);
-                    ui.label(RichText::new("Drop an image folder here, or click 'Choose Folder...'").color(colors::TEXT_MUTED));
+                    ui.label(RichText::new("Drop a video file (.mp4, .mov, .mkv, .webm, .mxf) or image folder here, or click 'Select Video / File...'").color(colors::TEXT_MUTED));
                     ui.add_space(12.0);
                 });
             }

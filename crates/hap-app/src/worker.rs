@@ -39,7 +39,7 @@ pub fn is_video_container(path: &std::path::Path) -> bool {
         .map(|e| {
             matches!(
                 e.to_lowercase().as_str(),
-                "mp4" | "mkv" | "avi" | "mov" | "m4v" | "webm" | "prores"
+                "mp4" | "mkv" | "avi" | "mov" | "m4v" | "webm" | "prores" | "mxf" | "ts" | "wmv" | "flv"
             )
         })
         .unwrap_or(false)
@@ -47,6 +47,7 @@ pub fn is_video_container(path: &std::path::Path) -> bool {
 
 #[allow(dead_code)]
 pub struct VideoProbeInfo {
+    pub codec: String,
     pub width: usize,
     pub height: usize,
     pub fps: f32,
@@ -61,10 +62,15 @@ pub fn probe_video_input(path: &std::path::Path) -> Result<VideoProbeInfo, Strin
     #[cfg(windows)]
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-    // 1. Try ffprobe for dimensions, framerate, frame count, duration
+    // 1. Try ffprobe for codec, dimensions, framerate, duration, frame count
     let mut probe_cmd = std::process::Command::new("ffprobe");
     probe_cmd
-        .args(&["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,r_frame_rate,nb_frames,duration", "-of", "csv=p=0"])
+        .args(&[
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_name,width,height,r_frame_rate,duration,nb_frames",
+            "-of", "csv=p=0",
+        ])
         .arg(path);
     #[cfg(windows)]
     probe_cmd.creation_flags(CREATE_NO_WINDOW);
@@ -79,14 +85,32 @@ pub fn probe_video_input(path: &std::path::Path) -> Result<VideoProbeInfo, Strin
 
     let out_str = String::from_utf8_lossy(&output.stdout);
     let parts: Vec<&str> = out_str.trim().split(',').collect();
-    if parts.len() < 3 {
+    if parts.len() < 4 {
         return Err("Could not parse video metadata from ffprobe output.".into());
     }
 
-    let width: usize = parts[0].trim().parse().map_err(|_| "Invalid width")?;
-    let height: usize = parts[1].trim().parse().map_err(|_| "Invalid height")?;
+    let codec_raw = parts[0].trim();
+    let codec = match codec_raw.to_lowercase().as_str() {
+        "h264" | "avc1" => "H.264 / AVC".to_string(),
+        "hevc" | "h265" | "hev1" => "H.265 / HEVC".to_string(),
+        "av1" | "av01" => "AV1".to_string(),
+        "prores" => "Apple ProRes".to_string(),
+        "vp9" => "VP9".to_string(),
+        "vp8" => "VP8".to_string(),
+        "dnxhd" | "dnxhr" => "Avid DNxHD/HR".to_string(),
+        other => {
+            if other.is_empty() {
+                "Video".to_string()
+            } else {
+                other.to_uppercase()
+            }
+        }
+    };
 
-    let fps_str = parts[2].trim();
+    let width: usize = parts[1].trim().parse().map_err(|_| "Invalid width")?;
+    let height: usize = parts[2].trim().parse().map_err(|_| "Invalid height")?;
+
+    let fps_str = parts[3].trim();
     let fps: f32 = if let Some((num, den)) = fps_str.split_once('/') {
         let n: f32 = num.parse().unwrap_or(30.0);
         let d: f32 = den.parse().unwrap_or(1.0);
@@ -95,8 +119,8 @@ pub fn probe_video_input(path: &std::path::Path) -> Result<VideoProbeInfo, Strin
         fps_str.parse().unwrap_or(30.0)
     };
 
-    let duration: f32 = parts.get(3).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
-    let frame_count: usize = parts.get(4)
+    let duration: f32 = parts.get(4).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
+    let frame_count: usize = parts.get(5)
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or_else(|| {
             if duration > 0.0 && fps > 0.0 {
@@ -132,6 +156,7 @@ pub fn probe_video_input(path: &std::path::Path) -> Result<VideoProbeInfo, Strin
     };
 
     Ok(VideoProbeInfo {
+        codec,
         width,
         height,
         fps,
@@ -488,3 +513,20 @@ fn spawn_encode_from_video(
         message: format!("Successfully encoded {} frames from video to {:?} ({:.2}s)", current_frame, config.output_file, total_secs),
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_video_container_extensions() {
+        assert!(is_video_container(std::path::Path::new("render.mp4")));
+        assert!(is_video_container(std::path::Path::new("video.mkv")));
+        assert!(is_video_container(std::path::Path::new("clip.mov")));
+        assert!(is_video_container(std::path::Path::new("web.webm")));
+        assert!(is_video_container(std::path::Path::new("broadcast.mxf")));
+        assert!(!is_video_container(std::path::Path::new("frame_0001.png")));
+        assert!(!is_video_container(std::path::Path::new("still.jpg")));
+    }
+}
+
