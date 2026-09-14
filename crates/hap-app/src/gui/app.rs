@@ -921,6 +921,14 @@ impl eframe::App for HapLabApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        let has_media = self.reader.is_some() || self.preview_texture.is_some();
+
+        // 0. FULL-WINDOW AMBIENT GLOW (When no media is loaded)
+        // Seamlessly blankets the entire window background with zero borders or outlines.
+        if !has_media && self.show_ambient_glow {
+            let time = self.ambient_start.elapsed().as_secs_f32();
+            paint_ambient_glow(ui.painter(), ui.max_rect(), time, self.is_drag_hovered);
+        }
 
         // Lazily load embedded 256px neon cyan app icon
         if self.app_icon_texture.is_none() {
@@ -937,10 +945,18 @@ impl eframe::App for HapLabApp {
         // ===================================================================
         // 1. TOP MENU BAR & QUICK ACTION BUTTONS
         // ===================================================================
-        let menu_frame = egui::Frame::canvas(ui.style())
-            .fill(colors::BG_CARD)
-            .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
-            .inner_margin(egui::Margin::symmetric(14, 6));
+        let menu_frame = if has_media {
+            egui::Frame::canvas(ui.style())
+                .fill(colors::BG_CARD)
+                .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
+                .inner_margin(egui::Margin::symmetric(14, 6))
+        } else {
+            egui::Frame::new()
+                .fill(Color32::from_rgba_premultiplied(12, 14, 20, 150))
+                .stroke(Stroke::NONE)
+                .corner_radius(CornerRadius::ZERO)
+                .inner_margin(egui::Margin::symmetric(14, 7))
+        };
 
         menu_frame.show(ui, |ui: &mut egui::Ui| {
             egui::MenuBar::new().ui(ui, |ui| {
@@ -1201,7 +1217,9 @@ impl eframe::App for HapLabApp {
             });
         });
 
-        ui.add_space(6.0);
+        if has_media {
+            ui.add_space(6.0);
+        }
 
         // ===================================================================
         // 2. CENTRAL MAIN CANVAS (PLAYER VIEWPORT)
@@ -1210,14 +1228,22 @@ impl eframe::App for HapLabApp {
         let canvas_height = if show_transport {
             ui.available_height() - 95.0 // Reserve room for bottom transport bar
         } else {
-            ui.available_height() - 2.0
+            ui.available_height()
         };
 
-        let canvas_frame = egui::Frame::canvas(ui.style())
-            .fill(colors::BG_APP)
-            .inner_margin(egui::Margin::same(8));
+        let canvas_frame = if has_media {
+            egui::Frame::canvas(ui.style())
+                .fill(colors::BG_APP)
+                .inner_margin(egui::Margin::same(8))
+        } else {
+            egui::Frame::new()
+                .fill(Color32::TRANSPARENT)
+                .stroke(Stroke::NONE)
+                .inner_margin(egui::Margin::ZERO)
+                .corner_radius(CornerRadius::ZERO)
+        };
 
-        canvas_frame.show(ui, |ui| {
+        canvas_frame.show(ui, |ui: &mut egui::Ui| {
             ui.set_height(canvas_height);
             let has_media = self.reader.is_some() || self.preview_texture.is_some();
 
@@ -1338,7 +1364,7 @@ impl eframe::App for HapLabApp {
                     }
                 });
             } else {
-                // --- MINIMALIST AMBIENT GLOW & CLICK-ANYWHERE PLAYBACK AREA ---
+                // --- CLICK-ANYWHERE PLAYBACK AREA ---
                 let available_size = ui.available_size();
                 let (canvas_rect, resp) = ui.allocate_exact_size(available_size, egui::Sense::click());
 
@@ -1357,22 +1383,20 @@ impl eframe::App for HapLabApp {
                     }
                 }
 
-                if self.show_ambient_glow {
-                    let time = self.ambient_start.elapsed().as_secs_f32();
-                    paint_ambient_glow(ui.painter(), canvas_rect, time, self.is_drag_hovered);
-                }
-
+                // "drop media here" typography:
+                // Opaque, large, refined typography using Segoe UI
                 let text_color = if self.is_drag_hovered {
-                    Color32::from_rgba_premultiplied(200, 205, 220, 210)
+                    Color32::WHITE
                 } else {
-                    Color32::from_rgba_premultiplied(110, 115, 130, 160)
+                    Color32::from_rgba_premultiplied(225, 230, 245, 230)
                 };
 
+                let font_id = egui::FontId::new(28.0, egui::FontFamily::Proportional);
                 ui.painter().text(
                     canvas_rect.center(),
                     egui::Align2::CENTER_CENTER,
                     "drop media here",
-                    egui::FontId::proportional(15.0),
+                    font_id,
                     text_color,
                 );
             }
