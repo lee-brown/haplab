@@ -1206,7 +1206,12 @@ impl eframe::App for HapLabApp {
         // ===================================================================
         // 2. CENTRAL MAIN CANVAS (PLAYER VIEWPORT)
         // ===================================================================
-        let canvas_height = ui.available_height() - 95.0; // Reserve room for bottom transport bar
+        let show_transport = self.reader.is_some() || self.enc_input_path.is_some();
+        let canvas_height = if show_transport {
+            ui.available_height() - 95.0 // Reserve room for bottom transport bar
+        } else {
+            ui.available_height() - 2.0
+        };
 
         let canvas_frame = egui::Frame::canvas(ui.style())
             .fill(colors::BG_APP)
@@ -1333,112 +1338,58 @@ impl eframe::App for HapLabApp {
                     }
                 });
             } else {
-                // --- MINIMALIST AMBIENT GLOW & DROP TARGET ---
+                // --- MINIMALIST AMBIENT GLOW & CLICK-ANYWHERE PLAYBACK AREA ---
                 let available_size = ui.available_size();
-                let (canvas_rect, _resp) = ui.allocate_exact_size(available_size, egui::Sense::hover());
+                let (canvas_rect, resp) = ui.allocate_exact_size(available_size, egui::Sense::click());
+
+                if resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+
+                if resp.clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("All Media", &["mov", "mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts", "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
+                        .add_filter("QuickTime HAP Videos (*.mov)", &["mov"])
+                        .add_filter("Video Files (*.mp4, *.mkv, *.webm, *.mxf, *.avi)", &["mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts"])
+                        .pick_file()
+                    {
+                        self.open_media_file(path, &ctx);
+                    }
+                }
 
                 if self.show_ambient_glow {
                     let time = self.ambient_start.elapsed().as_secs_f32();
                     paint_ambient_glow(ui.painter(), canvas_rect, time, self.is_drag_hovered);
                 }
 
-                // Centered frosted-glass drop card
-                let card_w = 460.0f32.min(available_size.x - 40.0).max(280.0);
-                let card_h = 230.0f32.min(available_size.y - 40.0).max(180.0);
-                let card_rect = Rect::from_center_size(canvas_rect.center(), Vec2::new(card_w, card_h));
-
-                // Frosted glass background & responsive stroke
-                let bg_fill = if self.is_drag_hovered {
-                    Color32::from_rgba_premultiplied(32, 24, 48, 225)
+                let text_color = if self.is_drag_hovered {
+                    Color32::from_rgba_premultiplied(200, 205, 220, 210)
                 } else {
-                    Color32::from_rgba_premultiplied(16, 18, 26, 190)
-                };
-                let stroke_color = if self.is_drag_hovered {
-                    Color32::from_rgb(180, 90, 255)
-                } else {
-                    Color32::from_rgba_premultiplied(255, 255, 255, 28)
+                    Color32::from_rgba_premultiplied(110, 115, 130, 160)
                 };
 
-                ui.painter().rect_filled(card_rect, CornerRadius::same(16), bg_fill);
-                ui.painter().rect_stroke(
-                    card_rect,
-                    CornerRadius::same(16),
-                    Stroke::new(if self.is_drag_hovered { 2.0 } else { 1.0 }, stroke_color),
-                    egui::StrokeKind::Inside,
+                ui.painter().text(
+                    canvas_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "drop media here",
+                    egui::FontId::proportional(15.0),
+                    text_color,
                 );
-
-                let mut card_ui = ui.new_child(
-                    egui::UiBuilder::new()
-                        .max_rect(card_rect.shrink(18.0))
-                        .layout(egui::Layout::top_down(egui::Align::Center)),
-                );
-
-                card_ui.add_space(4.0);
-
-                if let Some(ref icon) = self.app_icon_texture {
-                    let (icon_rect, _) = card_ui.allocate_exact_size(Vec2::new(44.0, 44.0), egui::Sense::hover());
-                    card_ui.painter().image(
-                        icon.id(),
-                        icon_rect,
-                        Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                        if self.is_drag_hovered {
-                            Color32::WHITE
-                        } else {
-                            Color32::from_rgba_premultiplied(225, 230, 255, 210)
-                        },
-                    );
-                    card_ui.add_space(10.0);
-                }
-
-                let title_text = if self.is_drag_hovered {
-                    "Release to Open Media"
-                } else {
-                    "Drop media file here"
-                };
-                card_ui.label(RichText::new(title_text).size(17.0).color(Color32::WHITE).strong());
-                card_ui.add_space(4.0);
-                card_ui.label(
-                    RichText::new("QuickTime HAP | MP4 | HEVC | AV1 | ProRes | Image Sequences")
-                        .size(11.5)
-                        .color(colors::TEXT_MUTED),
-                );
-
-                card_ui.add_space(18.0);
-
-                card_ui.horizontal(|ui| {
-                    if ui.add(egui::Button::new(RichText::new("Browse File... (Ctrl+O)").size(12.5)).min_size(Vec2::new(140.0, 30.0))).clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("All Media", &["mov", "mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts", "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
-                            .add_filter("QuickTime HAP Videos (*.mov)", &["mov"])
-                            .add_filter("Video Files (*.mp4, *.mkv, *.webm, *.mxf, *.avi)", &["mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts"])
-                            .pick_file()
-                        {
-                            self.open_media_file(path, &ctx);
-                        }
-                    }
-
-                    ui.add_space(8.0);
-
-                    if ui.add(egui::Button::new(RichText::new("Open Folder...").size(12.5)).min_size(Vec2::new(110.0, 30.0))).clicked() {
-                        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                            self.open_media_file(folder, &ctx);
-                        }
-                    }
-                });
             }
         });
-
-        ui.add_space(6.0);
 
         // ===================================================================
         // 3. BOTTOM TRANSPORT BAR & STATUS
         // ===================================================================
-        let transport_frame = egui::Frame::canvas(ui.style())
-            .fill(colors::BG_CARD)
-            .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
-            .inner_margin(egui::Margin::symmetric(18, 8));
+        if show_transport {
+            ui.add_space(6.0);
 
-        transport_frame.show(ui, |ui| {
+            let transport_frame = egui::Frame::canvas(ui.style())
+                .fill(colors::BG_CARD)
+                .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
+                .inner_margin(egui::Margin::symmetric(18, 8));
+
+            transport_frame.show(ui, |ui| {
             if let Some(ref reader) = self.reader {
                 let count = reader.frame_count();
                 let fps = reader.fps().max(1.0);
@@ -1635,17 +1586,9 @@ impl eframe::App for HapLabApp {
                         }
                     });
                 });
-            } else {
-                // Empty state bottom status
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Ready").color(colors::TEXT_FAINT).size(12.0));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new("Space: Play | Left/Right: Step | Ctrl+O: Open | Ctrl+E: Transcode | F1: Shortcuts").color(colors::TEXT_FAINT).size(11.0));
-                    });
-                });
             }
 
-            // Toast bar at bottom
+            // Toast bar at bottom of transport
             if let Some((ref msg, time, color)) = self.toast {
                 if time.elapsed().as_secs_f32() < 4.0 {
                     ui.add_space(2.0);
@@ -1655,6 +1598,18 @@ impl eframe::App for HapLabApp {
                 }
             }
         });
+    } else if let Some((ref msg, time, color)) = self.toast {
+        // Floating toast when transport bar is hidden
+        if time.elapsed().as_secs_f32() < 4.0 {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.add_space(14.0);
+                ui.label(RichText::new(msg).color(color).strong().size(12.0));
+            });
+        } else {
+            self.toast = None;
+        }
+    }
 
         // ===================================================================
         // 4. FLOATING STUDIO WINDOWS / DIALOGS
