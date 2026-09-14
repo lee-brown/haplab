@@ -266,15 +266,20 @@ fn run_encode(args: EncodeArgs) -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(windows)]
         const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-        let mut cmd = std::process::Command::new("ffmpeg");
-        cmd.args(&["-v", "error", "-i"])
+        let ffmpeg_bin = crate::worker::find_ffmpeg_binary();
+        let mut cmd = std::process::Command::new(&ffmpeg_bin);
+        cmd.args(&["-nostdin", "-v", "error", "-i"])
             .arg(&args.input)
             .args(&["-f", "rawvideo", "-pix_fmt", "rgba", "-"]);
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
 
-        let mut child = cmd.stdout(std::process::Stdio::piped()).spawn()
-            .map_err(|e| format!("Failed to spawn ffmpeg: {}", e))?;
+        let mut child = cmd
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to spawn ffmpeg ({}): {}", ffmpeg_bin.display(), e))?;
         let mut stdout = child.stdout.take().ok_or("Failed to capture ffmpeg stdout pipe")?;
 
         let frame_bytes = width * height * 4;

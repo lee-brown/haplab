@@ -462,10 +462,20 @@ impl HapLabApp {
                 alpha_mode: self.enc_alpha_mode,
                 dither_mode: self.enc_dither_mode,
                 quality: self.enc_quality,
+                video_dimensions: if self.enc_detected_w > 0 && self.enc_detected_h > 0 {
+                    Some((self.enc_detected_w as usize, self.enc_detected_h as usize))
+                } else {
+                    None
+                },
+                total_frames: if self.enc_detected_frames > 0 {
+                    Some(self.enc_detected_frames)
+                } else {
+                    None
+                },
             };
             self.enc_start_time = Some(Instant::now());
             spawn_encode_worker(config, cancel_flag, tx);
-            self.notify("Converting video for HAP playback...", colors::ACCENT_BLUE);
+            self.notify("Preparing video for high-speed HAP playback...", colors::ACCENT_BLUE);
         }
     }
 
@@ -1027,7 +1037,7 @@ impl eframe::App for HapLabApp {
 
                         self.update_suggested_output_filename();
                         self.notify(
-                            format!("Loaded video {}: {} frames. Click Convert & Play for high-speed HAP playback.", fname, probe.frame_count),
+                            format!("Loaded {}: {} frames. Press Play or Space to begin playback.", fname, probe.frame_count),
                             colors::ACCENT_CYAN,
                         );
                     }
@@ -1536,9 +1546,13 @@ impl eframe::App for HapLabApp {
                             }
                         }
                     } else if !has_reader && self.enc_input_path.is_some() {
-                        // Source video: fast Convert & Play button or progress
+                        // Source video: fast Play button or live progress
                         if let Some(ref status) = self.enc_status {
                             match status {
+                                WorkerProgress::Started { total } => {
+                                    ui.spinner();
+                                    ui.label(RichText::new(format!("Starting HAP stream ({} frames)...", total)).color(colors::ACCENT_CYAN));
+                                }
                                 WorkerProgress::Progress { current, total, fps, percent } => {
                                     ui.label(RichText::new(format!("Preparing HAP stream: {}/{} ({:.0}%)", current, total, percent)).color(colors::ACCENT_CYAN));
                                     ui.add(egui::ProgressBar::new(*percent / 100.0).show_percentage());
@@ -1550,11 +1564,11 @@ impl eframe::App for HapLabApp {
                                     }
                                 }
                                 _ => {
-                                    let play_btn = egui::Button::new(RichText::new("Convert & Play (Fast HAP)").strong().size(13.0).color(Color32::WHITE))
-                                        .min_size(Vec2::new(210.0, 26.0))
+                                    let play_btn = egui::Button::new(RichText::new("Play").strong().size(13.0).color(Color32::WHITE))
+                                        .min_size(Vec2::new(96.0, 26.0))
                                         .fill(colors::ACCENT_BLUE)
                                         .corner_radius(CornerRadius::same(5));
-                                    if ui.add(play_btn).on_hover_text("Fast pure-Rust transcode into HAP MOV and begin 60+ FPS playback immediately").clicked() {
+                                    if ui.add(play_btn).on_hover_text("Start high-speed HAP playback (Space)").clicked() {
                                         self.start_quick_encode_and_play();
                                     }
                                     if ui.button("Settings... (Ctrl+E)").clicked() {
@@ -1563,11 +1577,11 @@ impl eframe::App for HapLabApp {
                                 }
                             }
                         } else {
-                            let play_btn = egui::Button::new(RichText::new("Convert & Play (Fast HAP)").strong().size(13.0).color(Color32::WHITE))
-                                .min_size(Vec2::new(210.0, 26.0))
+                            let play_btn = egui::Button::new(RichText::new("Play").strong().size(13.0).color(Color32::WHITE))
+                                .min_size(Vec2::new(96.0, 26.0))
                                 .fill(colors::ACCENT_BLUE)
                                 .corner_radius(CornerRadius::same(5));
-                            if ui.add(play_btn).on_hover_text("Fast pure-Rust transcode into HAP MOV and begin 60+ FPS playback immediately").clicked() {
+                            if ui.add(play_btn).on_hover_text("Start high-speed HAP playback (Space)").clicked() {
                                 self.start_quick_encode_and_play();
                             }
                             if ui.button("Settings... (Ctrl+E)").clicked() {
@@ -1795,7 +1809,18 @@ impl eframe::App for HapLabApp {
                     }
 
                     ui.vertical_centered(|ui| {
-                        let (rect, _response) = ui.allocate_exact_size(Vec2::new(final_w, final_h), egui::Sense::hover());
+                        let (rect, resp) = ui.allocate_exact_size(Vec2::new(final_w, final_h), egui::Sense::click());
+                        if resp.clicked() {
+                            if self.reader.is_some() {
+                                self.is_playing = !self.is_playing;
+                                self.last_frame_time = Instant::now();
+                            } else if self.enc_input_path.is_some() && self.enc_rx.is_none() && self.still_image_info.is_none() {
+                                self.start_quick_encode_and_play();
+                            }
+                        }
+                        if resp.hovered() && (self.reader.is_some() || (self.enc_input_path.is_some() && self.still_image_info.is_none())) {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
 
                         // Paint Canvas Background
                         match self.bg_mode {
@@ -2136,6 +2161,16 @@ impl HapLabApp {
                                     alpha_mode: self.enc_alpha_mode,
                                     dither_mode: self.enc_dither_mode,
                                     quality: self.enc_quality,
+                                    video_dimensions: if self.enc_detected_w > 0 && self.enc_detected_h > 0 {
+                                        Some((self.enc_detected_w as usize, self.enc_detected_h as usize))
+                                    } else {
+                                        None
+                                    },
+                                    total_frames: if self.enc_detected_frames > 0 {
+                                        Some(self.enc_detected_frames)
+                                    } else {
+                                        None
+                                    },
                                 };
 
                                 self.log(&format!("Started transcode: {:?} -> {:?}", in_p, out_p));

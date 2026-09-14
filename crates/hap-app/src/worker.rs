@@ -67,6 +67,73 @@ pub struct EncodeJobConfig {
     pub alpha_mode: AlphaMode,
     pub dither_mode: DitherMode,
     pub quality: QualityPreset,
+    pub video_dimensions: Option<(usize, usize)>,
+    pub total_frames: Option<usize>,
+}
+
+/// Resolve the path to the ffmpeg executable, preferring direct tools binaries over shims.
+pub fn find_ffmpeg_binary() -> PathBuf {
+    find_tool_binary("ffmpeg")
+}
+
+/// Resolve the path to the ffprobe executable, preferring direct tools binaries over shims.
+pub fn find_ffprobe_binary() -> PathBuf {
+    find_tool_binary("ffprobe")
+}
+
+fn find_tool_binary(tool_name: &str) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let exe_name = if tool_name.ends_with(".exe") {
+            tool_name.to_string()
+        } else {
+            format!("{}.exe", tool_name)
+        };
+
+        // 1. Direct Chocolatey tools directory (bypasses Chocolatey ShimGen shims)
+        let choco_tool = PathBuf::from(r"C:\ProgramData\chocolatey\lib\ffmpeg\tools\ffmpeg\bin").join(&exe_name);
+        if choco_tool.is_file() {
+            return choco_tool;
+        }
+
+        // 2. Co-located next to running application binary
+        if let Ok(cur_exe) = std::env::current_exe() {
+            if let Some(parent) = cur_exe.parent() {
+                let local_path = parent.join(&exe_name);
+                if local_path.is_file() {
+                    return local_path;
+                }
+            }
+        }
+
+        // 3. User Scoop installations
+        if let Ok(userprofile) = std::env::var("USERPROFILE") {
+            let scoop_path = PathBuf::from(&userprofile).join(format!(r"scoop\apps\ffmpeg\current\bin\{}", exe_name));
+            if scoop_path.is_file() {
+                return scoop_path;
+            }
+        }
+
+        // 4. Windows WinGet package directories
+        if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
+            let winget_path = PathBuf::from(&localappdata).join(format!(r"Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg\bin\{}", exe_name));
+            if winget_path.is_file() {
+                return winget_path;
+            }
+        }
+
+        // 5. System PATH lookup
+        if let Ok(path_var) = std::env::var("PATH") {
+            for dir in std::env::split_paths(&path_var) {
+                let candidate = dir.join(&exe_name);
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
+        }
+    }
+
+    PathBuf::from(tool_name)
 }
 
 pub fn is_video_container(path: &std::path::Path) -> bool {
@@ -92,6 +159,69 @@ pub struct VideoProbeInfo {
     pub thumbnail_rgba: Option<(u32, u32, Vec<u8>)>,
 }
 
+/// Quickly probe video dimensions and stream metadata without extracting thumbnails.
+pub fn probe_video_dimensions(path: &std::path::Path) -> Result<(usize, usize, usize, f32), String> {
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
+    #[cfg(windows)]
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let ffprobe_bin = find_ffprobe_binary();
+    let mut probe_cmd = std::process::Command::new(&ffprobe_bin);
+    probe_cmd
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .args(&[
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height,r_frame_rate,duration,nb_frames",
+            "-of", "csv=p=0",
+        ])
+        .arg(path);
+    #[cfg(windows)]
+    probe_cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let output = probe_cmd.output().map_err(|e| {
+        format!("Failed to execute ffprobe ({}): {}", ffprobe_bin.display(), e)
+    })?;
+
+    if !output.status.success() {
+        let err_text = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Could not inspect video dimensions using ffprobe: {}", err_text.trim()));
+    }
+
+    let out_str = String::from_utf8_lossy(&output.stdout);
+    let parts: Vec<&str> = out_str.trim().split(',').collect();
+    if parts.len() < 3 {
+        return Err("Could not parse video stream dimensions from ffprobe output.".into());
+    }
+
+    let width: usize = parts[0].trim().parse().map_err(|_| "Invalid width")?;
+    let height: usize = parts[1].trim().parse().map_err(|_| "Invalid height")?;
+
+    let fps_str = parts[2].trim();
+    let fps: f32 = if let Some((num, den)) = fps_str.split_once('/') {
+        let n: f32 = num.parse().unwrap_or(30.0);
+        let d: f32 = den.parse().unwrap_or(1.0);
+        if d > 0.0 { n / d } else { 30.0 }
+    } else {
+        fps_str.parse().unwrap_or(30.0)
+    };
+
+    let duration: f32 = parts.get(3).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
+    let frame_count: usize = parts.get(4)
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or_else(|| {
+            if duration > 0.0 && fps > 0.0 {
+                (duration * fps).round() as usize
+            } else {
+                0
+            }
+        });
+
+    Ok((width, height, frame_count, fps))
+}
+
 pub fn probe_video_input(path: &std::path::Path) -> Result<VideoProbeInfo, String> {
     #[cfg(windows)]
     use std::os::windows::process::CommandExt;
@@ -99,8 +229,11 @@ pub fn probe_video_input(path: &std::path::Path) -> Result<VideoProbeInfo, Strin
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
     // 1. Try ffprobe for codec, dimensions, framerate, duration, frame count
-    let mut probe_cmd = std::process::Command::new("ffprobe");
+    let ffprobe_bin = find_ffprobe_binary();
+    let mut probe_cmd = std::process::Command::new(&ffprobe_bin);
     probe_cmd
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .args(&[
             "-v", "error",
             "-select_streams", "v:0",
@@ -116,7 +249,8 @@ pub fn probe_video_input(path: &std::path::Path) -> Result<VideoProbeInfo, Strin
     })?;
 
     if !output.status.success() {
-        return Err("Could not inspect video file using ffprobe.".into());
+        let err_text = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Could not inspect video file using ffprobe: {}", err_text.trim()));
     }
 
     let out_str = String::from_utf8_lossy(&output.stdout);
@@ -167,9 +301,12 @@ pub fn probe_video_input(path: &std::path::Path) -> Result<VideoProbeInfo, Strin
         });
 
     // 2. Extract 1st frame thumbnail via ffmpeg
-    let mut thumb_cmd = std::process::Command::new("ffmpeg");
+    let ffmpeg_bin = find_ffmpeg_binary();
+    let mut thumb_cmd = std::process::Command::new(&ffmpeg_bin);
     thumb_cmd
-        .args(&["-v", "error", "-ss", "00:00:00", "-i"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .args(&["-nostdin", "-v", "error", "-ss", "00:00:00", "-i"])
         .arg(path)
         .args(&["-vframes", "1", "-f", "image2pipe", "-vcodec", "png", "-"]);
     #[cfg(windows)]
@@ -420,16 +557,18 @@ fn spawn_encode_from_video(
     cancel_flag: Arc<AtomicBool>,
     progress_tx: Sender<WorkerProgress>,
 ) {
-    let probe = match probe_video_input(&config.input_dir) {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = progress_tx.send(WorkerProgress::Error(e));
-            return;
+    let (width, height, total) = if let Some((w, h)) = config.video_dimensions {
+        (w, h, config.total_frames.unwrap_or(1))
+    } else {
+        match probe_video_dimensions(&config.input_dir) {
+            Ok((w, h, frames, _fps)) => (w, h, frames.max(1)),
+            Err(e) => {
+                let _ = progress_tx.send(WorkerProgress::Error(e));
+                return;
+            }
         }
     };
 
-    let width = probe.width;
-    let height = probe.height;
     if width % 4 != 0 || height % 4 != 0 {
         let _ = progress_tx.send(WorkerProgress::Error(format!(
             "Video dimensions ({}x{}) must be multiples of 4 for HAP texture encoding.",
@@ -438,7 +577,6 @@ fn spawn_encode_from_video(
         return;
     }
 
-    let total = probe.frame_count.max(1);
     let _ = progress_tx.send(WorkerProgress::Started { total });
 
     let video_cfg = VideoConfig::new(width as u32, height as u32, config.fps, config.format);
@@ -455,17 +593,27 @@ fn spawn_encode_from_video(
     #[cfg(windows)]
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-    let mut cmd = std::process::Command::new("ffmpeg");
-    cmd.args(&["-v", "error", "-i"])
+    let ffmpeg_bin = find_ffmpeg_binary();
+    let mut cmd = std::process::Command::new(&ffmpeg_bin);
+    cmd.args(&["-nostdin", "-v", "error", "-i"])
         .arg(&config.input_dir)
         .args(&["-f", "rawvideo", "-pix_fmt", "rgba", "-"]);
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
-    let mut child = match cmd.stdout(std::process::Stdio::piped()).spawn() {
+    let mut child = match cmd
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
         Ok(c) => c,
         Err(e) => {
-            let _ = progress_tx.send(WorkerProgress::Error(format!("Failed to spawn ffmpeg: {}", e)));
+            let _ = progress_tx.send(WorkerProgress::Error(format!(
+                "Failed to spawn ffmpeg ({}): {}",
+                ffmpeg_bin.display(),
+                e
+            )));
             return;
         }
     };
@@ -542,7 +690,22 @@ fn spawn_encode_from_video(
         });
     }
 
-    let _ = child.wait();
+    let status = child.wait();
+    if current_frame == 0 {
+        let mut err_detail = String::new();
+        if let Some(mut stderr_pipe) = child.stderr.take() {
+            let mut buf = Vec::new();
+            let _ = stderr_pipe.read_to_end(&mut buf);
+            err_detail = String::from_utf8_lossy(&buf).trim().to_string();
+        }
+        let reason = if !err_detail.is_empty() {
+            err_detail
+        } else {
+            format!("FFmpeg exited with {:?} but delivered 0 video frames.", status)
+        };
+        let _ = progress_tx.send(WorkerProgress::Error(format!("Video transcode failed: {}", reason)));
+        return;
+    }
 
     if let Err(e) = writer.finalize() {
         let _ = progress_tx.send(WorkerProgress::Error(format!("Finalize error: {}", e)));
@@ -867,6 +1030,128 @@ mod tests {
 
         let _ = fs::remove_file(png_path);
         let _ = fs::remove_file(jpg_path);
+        let _ = fs::remove_file(mov_path);
+        let _ = fs::remove_dir(temp_dir);
+    }
+
+    #[test]
+    fn test_find_and_spawn_ffmpeg() {
+        let ffmpeg_bin = find_ffmpeg_binary();
+        let ffprobe_bin = find_ffprobe_binary();
+        assert!(!ffmpeg_bin.as_os_str().is_empty());
+        assert!(!ffprobe_bin.as_os_str().is_empty());
+
+        #[cfg(windows)]
+        use std::os::windows::process::CommandExt;
+        #[cfg(windows)]
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        let mut cmd = std::process::Command::new(&ffmpeg_bin);
+        cmd.args(&["-nostdin", "-v", "error", "-version"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        let res = cmd.spawn();
+        assert!(res.is_ok(), "Spawning ffmpeg should succeed without error: {:?}", res);
+    }
+
+    #[test]
+    fn test_transcode_mp4_to_hap_mov() {
+        let ffmpeg_bin = find_ffmpeg_binary();
+        let temp_dir = std::env::temp_dir().join("haplab_test_mp4_transcode");
+        let _ = fs::create_dir_all(&temp_dir);
+        let mp4_path = temp_dir.join("input.mp4");
+        let mov_path = temp_dir.join("output.mov");
+
+        #[cfg(windows)]
+        use std::os::windows::process::CommandExt;
+        #[cfg(windows)]
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        // 1. Generate test MP4
+        let mut gen_cmd = std::process::Command::new(&ffmpeg_bin);
+        gen_cmd.args(&[
+            "-nostdin",
+            "-y",
+            "-f", "lavfi",
+            "-i", "testsrc=size=64x64:rate=30",
+            "-vframes", "4",
+        ])
+        .arg(&mp4_path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+        #[cfg(windows)]
+        gen_cmd.creation_flags(CREATE_NO_WINDOW);
+
+        if let Ok(status) = gen_cmd.status() {
+            if !status.success() {
+                // If ffmpeg cannot encode H.264 testsrc in this environment, skip gracefully
+                return;
+            }
+        } else {
+            return;
+        }
+
+        assert!(mp4_path.exists());
+
+        // 2. Test probe_video_dimensions
+        let (w, h, frames, fps) = probe_video_dimensions(&mp4_path).expect("probe_video_dimensions should succeed");
+        assert_eq!(w, 64);
+        assert_eq!(h, 64);
+        assert_eq!(frames, 4);
+        assert!((fps - 30.0).abs() < 0.1);
+
+        // 3. Test spawn_encode_from_video
+        let config = EncodeJobConfig {
+            input_dir: mp4_path.clone(),
+            output_file: mov_path.clone(),
+            format: HapFormat::HapY,
+            fps,
+            chunks: 2,
+            snappy: true,
+            color_range: ColorRange::Full,
+            alpha_mode: AlphaMode::Straight,
+            dither_mode: DitherMode::None,
+            quality: QualityPreset::Production,
+            video_dimensions: Some((w, h)),
+            total_frames: Some(frames),
+        };
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = crossbeam_channel::unbounded();
+        spawn_encode_from_video(config, cancel, tx);
+
+        let mut finished = false;
+        while let Ok(msg) = rx.recv() {
+            match msg {
+                WorkerProgress::Finished { .. } => {
+                    finished = true;
+                    break;
+                }
+                WorkerProgress::Error(e) => {
+                    panic!("Encode failed with error: {}", e);
+                }
+                _ => {}
+            }
+        }
+
+        assert!(finished, "Transcode should complete successfully");
+        assert!(mov_path.exists(), "Output MOV should exist");
+
+        // 4. Verify the generated HAP MOV with QtHapReader
+        let mut reader = QtHapReader::open(&mov_path).expect("Should open transcode MOV");
+        assert_eq!(reader.frame_count(), 4);
+        assert_eq!(reader.width(), 64);
+        assert_eq!(reader.height(), 64);
+        let pkt = reader.read_frame_packet(0).expect("Should read frame 0");
+        let rgba = decode_frame_to_rgba(&pkt, 64, 64).expect("Should decode frame 0 to RGBA");
+        assert_eq!(rgba.len(), 64 * 64 * 4);
+
+        let _ = fs::remove_file(mp4_path);
         let _ = fs::remove_file(mov_path);
         let _ = fs::remove_dir(temp_dir);
     }
