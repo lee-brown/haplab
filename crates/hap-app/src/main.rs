@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([1040.0, 780.0])
-        .with_min_inner_size([720.0, 520.0])
+        .with_min_inner_size([800.0, 520.0])
         .with_title("HapLab")
         .with_drag_and_drop(true);
 

@@ -1099,7 +1099,7 @@ impl eframe::App for HapLabApp {
         // Seamlessly blankets the entire window background with zero borders or outlines.
         if !has_media && self.show_ambient_glow {
             let time = self.ambient_start.elapsed().as_secs_f32();
-            paint_ambient_glow(ui.painter(), ui.max_rect(), time, self.is_drag_hovered);
+            paint_ambient_glow(&ctx.layer_painter(egui::LayerId::background()), ctx.viewport_rect(), time, self.is_drag_hovered);
         }
 
         // Lazily load embedded 256px neon cyan app icon
@@ -1118,289 +1118,645 @@ impl eframe::App for HapLabApp {
         // 1. TOP MENU BAR & QUICK ACTION BUTTONS
         // ===================================================================
         let menu_frame = if has_media {
-            egui::Frame::canvas(ui.style())
-                .fill(colors::BG_CARD)
-                .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
+            egui::Frame::new()
+                .fill(Color32::from_rgba_premultiplied(18, 22, 32, 225))
+                .stroke(Stroke::new(1.0, Color32::from_rgba_premultiplied(80, 100, 140, 45)))
                 .inner_margin(egui::Margin::symmetric(14, 6))
         } else {
             egui::Frame::new()
-                .fill(Color32::from_rgba_premultiplied(12, 14, 20, 150))
-                .stroke(Stroke::NONE)
-                .corner_radius(CornerRadius::ZERO)
+                .fill(Color32::from_rgba_premultiplied(12, 15, 22, 150))
+                .stroke(Stroke::new(1.0, Color32::from_rgba_premultiplied(80, 100, 140, 35)))
                 .inner_margin(egui::Margin::symmetric(14, 7))
         };
 
-        menu_frame.show(ui, |ui: &mut egui::Ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                // --- BRANDING ---
-                if let Some(ref icon) = self.app_icon_texture {
-                    let (rect, _response) = ui.allocate_exact_size(Vec2::new(18.0, 18.0), egui::Sense::hover());
-                    ui.painter().image(
-                        icon.id(),
-                        rect,
-                        Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                        Color32::WHITE,
-                    );
-                    ui.add_space(2.0);
-                }
-                ui.label(RichText::new("HapLab").strong().size(14.0).color(Color32::WHITE));
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(6.0);
-
-                // --- MENU: FILE ---
-                ui.menu_button("File", |ui: &mut egui::Ui| {
-                    if ui.button("Open Media File... (Ctrl+O)").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                             .add_filter("All Media", &["mov", "mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts", "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
-                            .add_filter("QuickTime HAP Videos (*.mov)", &["mov"])
-                            .add_filter("Video Files (*.mp4, *.mkv, *.webm, *.mxf, *.avi)", &["mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts"])
-                            .add_filter("Image Sequences (*.png, *.tiff, *.jpg)", &["png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
-                            .pick_file()
-                        {
-                            self.open_media_file(path, &ctx);
-                        }
-                        ui.close();
+        egui::Panel::top("top_menu_panel")
+            .show_separator_line(false)
+            .frame(menu_frame)
+            .show(ui, |ui: &mut egui::Ui| {
+                egui::MenuBar::new().ui(ui, |ui| {
+                    // --- BRANDING ---
+                    if let Some(ref icon) = self.app_icon_texture {
+                        let (rect, _response) = ui.allocate_exact_size(Vec2::new(18.0, 18.0), egui::Sense::hover());
+                        ui.painter().image(
+                            icon.id(),
+                            rect,
+                            Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                            Color32::WHITE,
+                        );
+                        ui.add_space(2.0);
                     }
-
-                    if ui.button("Open Image Sequence Folder... (Ctrl+Shift+O)").clicked() {
-                        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                            self.open_media_file(folder, &ctx);
-                        }
-                        ui.close();
-                    }
-
+                    ui.label(RichText::new("HapLab").strong().size(14.0).color(Color32::WHITE));
+                    ui.add_space(8.0);
                     ui.separator();
+                    ui.add_space(6.0);
 
-                    let can_transcode = self.enc_input_path.is_some() || self.mov_path.is_some();
-                    if ui.add_enabled(can_transcode, egui::Button::new("Transcode to HAP MOV... (Ctrl+E)")).clicked() {
-                        self.show_transcode_window = true;
-                        ui.close();
-                    }
-
-                    let can_export = self.reader.is_some();
-                    if ui.add_enabled(can_export, egui::Button::new("Export Frame Sequence...")).clicked() {
-                        self.show_export_panel = !self.show_export_panel;
-                        ui.close();
-                    }
-
-                    ui.separator();
-
-                    if ui.button("Set as Default Player for .mov").clicked() {
-                        match register_mov_association() {
-                            Ok(msg) => {
-                                self.log(&msg);
-                                self.notify(msg, colors::ACCENT_GREEN);
-                                let _ = open_windows_default_apps();
+                    // --- MENU: FILE ---
+                    ui.menu_button("File", |ui: &mut egui::Ui| {
+                        if ui.button("Open Media File... (Ctrl+O)").clicked() {
+                            if let Some(path) = rfd::FileDialog::new()
+                                 .add_filter("All Media", &["mov", "mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts", "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
+                                .add_filter("QuickTime HAP Videos (*.mov)", &["mov"])
+                                .add_filter("Video Files (*.mp4, *.mkv, *.webm, *.mxf, *.avi)", &["mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts"])
+                                .add_filter("Image Sequences (*.png, *.tiff, *.jpg)", &["png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
+                                .pick_file()
+                            {
+                                self.open_media_file(path, &ctx);
                             }
-                            Err(err) => {
-                                self.log(&err);
-                                self.notify(err, colors::ACCENT_AMBER);
+                            ui.close();
+                        }
+
+                        if ui.button("Open Image Sequence Folder... (Ctrl+Shift+O)").clicked() {
+                            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                                self.open_media_file(folder, &ctx);
+                            }
+                            ui.close();
+                        }
+
+                        ui.separator();
+
+                        let can_transcode = self.enc_input_path.is_some() || self.mov_path.is_some();
+                        if ui.add_enabled(can_transcode, egui::Button::new("Transcode to HAP MOV... (Ctrl+E)")).clicked() {
+                            self.show_transcode_window = true;
+                            ui.close();
+                        }
+
+                        let can_export = self.reader.is_some();
+                        if ui.add_enabled(can_export, egui::Button::new("Export Frame Sequence...")).clicked() {
+                            self.show_export_panel = !self.show_export_panel;
+                            ui.close();
+                        }
+
+                        ui.separator();
+
+                        if ui.button("Set as Default Player for .mov").clicked() {
+                            match register_mov_association() {
+                                Ok(msg) => {
+                                    self.log(&msg);
+                                    self.notify(msg, colors::ACCENT_GREEN);
+                                    let _ = open_windows_default_apps();
+                                }
+                                Err(err) => {
+                                    self.log(&err);
+                                    self.notify(err, colors::ACCENT_AMBER);
+                                }
+                            }
+                            ui.close();
+                        }
+
+                        ui.separator();
+
+                        let has_media = self.reader.is_some() || self.enc_input_path.is_some();
+                        if ui.add_enabled(has_media, egui::Button::new("Close Media (Ctrl+W)")).clicked() {
+                            self.close_media();
+                            ui.close();
+                        }
+
+                        if ui.button("Exit (Alt+F4)").clicked() {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                    });
+
+                    // --- MENU: PLAYBACK ---
+                    ui.menu_button("Playback", |ui: &mut egui::Ui| {
+                        let is_loaded = self.reader.is_some();
+                        let play_label = if self.is_playing { "Pause (Space)" } else { "Play (Space)" };
+                        if ui.add_enabled(is_loaded, egui::Button::new(play_label)).clicked() {
+                            self.is_playing = !self.is_playing;
+                            self.last_frame_time = Instant::now();
+                            ui.close();
+                        }
+
+                        ui.separator();
+
+                        if ui.add_enabled(is_loaded, egui::Button::new("Step -1 Frame (Left)")).clicked() {
+                            self.current_frame = self.current_frame.saturating_sub(1);
+                            self.update_preview_frame(&ctx);
+                            ui.close();
+                        }
+
+                        if ui.add_enabled(is_loaded, egui::Button::new("Step +1 Frame (Right)")).clicked() {
+                            if let Some(ref r) = self.reader {
+                                if self.current_frame + 1 < r.frame_count() {
+                                    self.current_frame += 1;
+                                    self.update_preview_frame(&ctx);
+                                }
+                            }
+                            ui.close();
+                        }
+
+                        if ui.add_enabled(is_loaded, egui::Button::new("Step -10 Frames (Shift+Left)")).clicked() {
+                            self.current_frame = self.current_frame.saturating_sub(10);
+                            self.update_preview_frame(&ctx);
+                            ui.close();
+                        }
+
+                        if ui.add_enabled(is_loaded, egui::Button::new("Step +10 Frames (Shift+Right)")).clicked() {
+                            if let Some(ref r) = self.reader {
+                                self.current_frame = (self.current_frame + 10).min(r.frame_count().saturating_sub(1));
+                                self.update_preview_frame(&ctx);
+                            }
+                            ui.close();
+                        }
+
+                        ui.separator();
+
+                        if ui.add_enabled(is_loaded, egui::Button::new("Jump to Start (Home)")).clicked() {
+                            self.current_frame = 0;
+                            self.update_preview_frame(&ctx);
+                            ui.close();
+                        }
+
+                        if ui.add_enabled(is_loaded, egui::Button::new("Jump to End (End)")).clicked() {
+                            if let Some(ref r) = self.reader {
+                                self.current_frame = r.frame_count().saturating_sub(1);
+                                self.update_preview_frame(&ctx);
+                            }
+                            ui.close();
+                        }
+
+                        ui.separator();
+
+                        let loop_str = if self.loop_playback { "Loop: On (L)" } else { "Loop: Off (L)" };
+                        if ui.button(loop_str).clicked() {
+                            self.loop_playback = !self.loop_playback;
+                            ui.close();
+                        }
+                    });
+
+                    // --- MENU: VIEW ---
+                    ui.menu_button("View", |ui: &mut egui::Ui| {
+                        ui.label(RichText::new("Color Channels").color(colors::TEXT_MUTED).size(11.0));
+                        if ui.selectable_value(&mut self.channel_mode, ChannelViewMode::Rgba, "RGBA Composite (1)").clicked() {
+                            self.refresh_channel_view(&ctx);
+                        }
+                        if ui.selectable_value(&mut self.channel_mode, ChannelViewMode::RgbOpaque, "RGB Only (2)").clicked() {
+                            self.refresh_channel_view(&ctx);
+                        }
+                        if ui.selectable_value(&mut self.channel_mode, ChannelViewMode::AlphaMatte, "Alpha Matte (3)").clicked() {
+                            self.refresh_channel_view(&ctx);
+                        }
+
+                        ui.separator();
+                        ui.label(RichText::new("Canvas Background").color(colors::TEXT_MUTED).size(11.0));
+                        ui.selectable_value(&mut self.bg_mode, BackgroundViewMode::Checkerboard, "Checkerboard");
+                        ui.selectable_value(&mut self.bg_mode, BackgroundViewMode::Dark, "Carbon Dark");
+                        ui.selectable_value(&mut self.bg_mode, BackgroundViewMode::Light, "Studio Light");
+
+                        ui.separator();
+                        let hud_text = if self.show_hud_overlay { "Hide Telemetry HUD (I)" } else { "Show Telemetry HUD (I)" };
+                        if ui.button(hud_text).clicked() {
+                            self.show_hud_overlay = !self.show_hud_overlay;
+                            ui.close();
+                        }
+
+                        ui.separator();
+                        ui.checkbox(&mut self.show_ambient_glow, "Ambient Light Glow");
+                    });
+
+                    // --- MENU: TOOLS ---
+                    ui.menu_button("Tools", |ui: &mut egui::Ui| {
+                        if ui.button("Transcode to HAP MOV... (Ctrl+E)").clicked() {
+                            self.show_transcode_window = true;
+                            ui.close();
+                        }
+
+                        if ui.button("Hardware Benchmark Suite... (Ctrl+B)").clicked() {
+                            self.show_benchmark_window = true;
+                            ui.close();
+                        }
+
+                        let can_audit = self.reader.is_some();
+                        if ui.add_enabled(can_audit, egui::Button::new("Stream Integrity & Fault Audit (Ctrl+T)")).clicked() {
+                            self.show_audit_window = true;
+                            ui.close();
+                        }
+
+                        if ui.button("System Diagnostics & GPU (Ctrl+D)").clicked() {
+                            self.show_diagnostics_window = true;
+                            ui.close();
+                        }
+                    });
+
+                    // --- MENU: HELP ---
+                    ui.menu_button("Help", |ui: &mut egui::Ui| {
+                        if ui.button("Keyboard Shortcuts (F1)").clicked() {
+                            self.show_shortcuts_window = true;
+                            ui.close();
+                        }
+                        if ui.button("About HapLab").clicked() {
+                            self.show_about_window = true;
+                            ui.close();
+                        }
+                    });
+
+                    // --- RIGHT-ALIGNED STATUS & QUICK BUTTONS ---
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui: &mut egui::Ui| {
+                        // Quick action buttons
+                        if ui.add(egui::Button::new(RichText::new("Diagnostics").size(12.0)).min_size(Vec2::new(82.0, 26.0))).clicked() {
+                            self.show_diagnostics_window = !self.show_diagnostics_window;
+                        }
+                        if ui.add(egui::Button::new(RichText::new("Benchmark").size(12.0)).min_size(Vec2::new(80.0, 26.0))).clicked() {
+                            self.show_benchmark_window = !self.show_benchmark_window;
+                        }
+                        if self.reader.is_some() {
+                            if ui.add(egui::Button::new(RichText::new("Audit").size(12.0)).min_size(Vec2::new(55.0, 26.0))).clicked() {
+                                self.show_audit_window = !self.show_audit_window;
                             }
                         }
-                        ui.close();
-                    }
 
-                    ui.separator();
+                        let trans_btn = egui::Button::new(RichText::new("Transcode").strong().size(12.5).color(Color32::WHITE))
+                            .min_size(Vec2::new(86.0, 26.0))
+                            .fill(colors::ACCENT_BLUE)
+                            .corner_radius(CornerRadius::same(5));
+                        if ui.add(trans_btn).on_hover_text("Open Transcode & Ingest Panel (Ctrl+E)").clicked() {
+                            self.show_transcode_window = !self.show_transcode_window;
+                        }
 
-                    let has_media = self.reader.is_some() || self.enc_input_path.is_some();
-                    if ui.add_enabled(has_media, egui::Button::new("Close Media (Ctrl+W)")).clicked() {
-                        self.close_media();
-                        ui.close();
-                    }
+                        ui.add_space(10.0);
+                        ui.separator();
+                        ui.add_space(10.0);
 
-                    if ui.button("Exit (Alt+F4)").clicked() {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
+                        // Active media status badges
+                        if let Some(ref reader) = self.reader {
+                            render_badge(ui, reader.format().name(), colors::BG_ELEVATED, colors::ACCENT_CYAN);
+                            render_badge(ui, &format!("{}x{}", reader.width(), reader.height()), colors::BG_ELEVATED, colors::TEXT_PRIMARY);
+                            render_badge(ui, &format!("{:.0} FPS", reader.fps()), colors::BG_ELEVATED, colors::TEXT_MUTED);
+                        } else if let Some(ref img) = self.still_image_info {
+                            render_badge(ui, "Still Image", colors::BG_ELEVATED, colors::ACCENT_CYAN);
+                            render_badge(ui, &format!("{}x{}", img.width, img.height), colors::BG_ELEVATED, colors::TEXT_PRIMARY);
+                        } else if let Some(ref codec) = self.enc_detected_codec {
+                            render_badge(ui, codec, colors::BG_ELEVATED, colors::ACCENT_CYAN);
+                            if self.enc_detected_w > 0 {
+                                render_badge(ui, &format!("{}x{}", self.enc_detected_w, self.enc_detected_h), colors::BG_ELEVATED, colors::TEXT_PRIMARY);
+                            }
+                        }
+                    });
+                });
+            });
+
+        // ===================================================================
+        // 2. BOTTOM TRANSPORT BAR & STATUS (PERMANENT)
+        // DOCKED FIRMLY TO BOTTOM VIEWPORT WITH TRANSLUCENT FROSTED GLASS
+        // ===================================================================
+        let transport_frame = if has_media {
+            egui::Frame::new()
+                .fill(Color32::from_rgba_premultiplied(16, 20, 30, 215)) // Frosted translucent dark glass
+                .stroke(Stroke::new(1.0, Color32::from_rgba_premultiplied(100, 130, 190, 55)))
+                .inner_margin(egui::Margin::symmetric(18, 8))
+        } else {
+            egui::Frame::new()
+                .fill(Color32::from_rgba_premultiplied(14, 18, 26, 175)) // Translucent glass showing ambient glow
+                .stroke(Stroke::new(1.0, Color32::from_rgba_premultiplied(100, 130, 190, 45)))
+                .inner_margin(egui::Margin::symmetric(18, 8))
+        };
+
+        egui::Panel::bottom("bottom_transport_panel")
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(transport_frame)
+            .show(ui, |ui| {
+                let has_reader = self.reader.is_some();
+                let is_still_image = self.still_image_info.is_some();
+                let (count, fps) = if let Some(ref reader) = self.reader {
+                    (reader.frame_count(), reader.fps().max(1.0))
+                } else if is_still_image {
+                    (1, 30.0)
+                } else if self.enc_detected_frames > 0 {
+                    (self.enc_detected_frames, self.enc_fps.max(1.0))
+                } else {
+                    (0, 30.0)
+                };
+                let max_frame = count.saturating_sub(1);
+
+                // Scrubber slider across top of bottom panel
+                let old_frame = self.current_frame;
+                let slider = egui::Slider::new(&mut self.current_frame, 0..=max_frame)
+                    .show_value(false)
+                    .trailing_fill(true);
+                ui.add_enabled_ui(has_reader && count > 0, |ui| {
+                    ui.add_sized([ui.available_width(), 18.0], slider);
                 });
 
-                // --- MENU: PLAYBACK ---
-                ui.menu_button("Playback", |ui: &mut egui::Ui| {
-                    let is_loaded = self.reader.is_some();
-                    let play_label = if self.is_playing { "Pause (Space)" } else { "Play (Space)" };
-                    if ui.add_enabled(is_loaded, egui::Button::new(play_label)).clicked() {
-                        self.is_playing = !self.is_playing;
-                        self.last_frame_time = Instant::now();
-                        ui.close();
+                if has_reader && old_frame != self.current_frame {
+                    self.update_preview_frame(&ctx);
+                }
+
+                ui.add_space(4.0);
+
+                // Transport controls & details row
+                ui.horizontal(|ui| {
+                    // Left: SMPTE timecode and frame counter
+                    let timecode = if has_reader {
+                        format_smpte_timecode(self.current_frame, fps)
+                    } else if is_still_image {
+                        "00:00:00:01".to_string()
+                    } else {
+                        "00:00:00:00".to_string()
+                    };
+                    let tc_color = if has_reader || is_still_image { colors::ACCENT_CYAN } else { colors::TEXT_FAINT };
+                    ui.label(RichText::new(timecode).monospace().size(14.0).color(tc_color).strong());
+
+                    if has_reader {
+                        let pct = if count > 0 { (self.current_frame as f32 / count as f32) * 100.0 } else { 0.0 };
+                        ui.monospace(format!("{}/{} ({:.0}%)", self.current_frame + 1, count, pct));
+                    } else if is_still_image {
+                        ui.monospace("1/1 (Image)");
+                    } else if count > 0 {
+                        ui.monospace(format!("0/{} (Source)", count));
+                    } else {
+                        ui.monospace("0/0 (0%)");
                     }
 
-                    ui.separator();
+                    ui.add_space(10.0);
 
-                    if ui.add_enabled(is_loaded, egui::Button::new("Step -1 Frame (Left)")).clicked() {
-                        self.current_frame = self.current_frame.saturating_sub(1);
-                        self.update_preview_frame(&ctx);
-                        ui.close();
-                    }
+                    // Center: Controls based on media state
+                    if is_still_image {
+                        // Still Image: Instant Conversion & Export
+                        ui.label("Format:");
+                        egui::ComboBox::from_id_salt("img_export_combo")
+                            .selected_text(match self.still_image_export_format.as_str() {
+                                "mov" => "HAP MOV (.mov)",
+                                "png" => "PNG (.png)",
+                                "jpg" => "JPEG (.jpg)",
+                                "tiff" => "TIFF (.tiff)",
+                                "webp" => "WebP (.webp)",
+                                "bmp" => "BMP (.bmp)",
+                                _ => "HAP MOV (.mov)",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.still_image_export_format, "mov".into(), "HAP MOV (.mov)");
+                                ui.selectable_value(&mut self.still_image_export_format, "png".into(), "PNG (.png)");
+                                ui.selectable_value(&mut self.still_image_export_format, "jpg".into(), "JPEG (.jpg)");
+                                ui.selectable_value(&mut self.still_image_export_format, "tiff".into(), "TIFF (.tiff)");
+                                ui.selectable_value(&mut self.still_image_export_format, "webp".into(), "WebP (.webp)");
+                                ui.selectable_value(&mut self.still_image_export_format, "bmp".into(), "BMP (.bmp)");
+                            });
 
-                    if ui.add_enabled(is_loaded, egui::Button::new("Step +1 Frame (Right)")).clicked() {
-                        if let Some(ref r) = self.reader {
-                            if self.current_frame + 1 < r.frame_count() {
+                        let convert_btn = egui::Button::new(RichText::new("Convert / Save Image...").strong().color(Color32::WHITE))
+                            .min_size(Vec2::new(170.0, 26.0))
+                            .fill(colors::ACCENT_BLUE);
+                        if ui.add(convert_btn).on_hover_text("Convert and save this image to HAP MOV or other image formats").clicked() {
+                            if let Some(ref img_info) = self.still_image_info {
+                                let ext = self.still_image_export_format.clone();
+                                let default_name = img_info.path.file_stem()
+                                    .map(|s| format!("{}_converted.{}", s.to_string_lossy(), ext))
+                                    .unwrap_or_else(|| format!("converted.{}", ext));
+
+                                let mut dialog = rfd::FileDialog::new().set_file_name(&default_name);
+                                if let Some(parent) = img_info.path.parent() {
+                                    dialog = dialog.set_directory(parent);
+                                }
+
+                                if let Some(dest) = dialog.pick_file() {
+                                    if let Some(ref rgba) = self.raw_frame_cache {
+                                        if ext == "mov" {
+                                            match export_image_to_hap_mov(rgba, img_info.width, img_info.height, &dest, HapFormat::HapY, true) {
+                                                Ok(()) => {
+                                                    let fname = dest.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                                                    self.notify(format!("Saved HAP MOV: {}", fname), colors::ACCENT_GREEN);
+                                                    self.open_media_file(dest, &ctx);
+                                                }
+                                                Err(err) => {
+                                                    self.notify(format!("HAP export failed: {}", err), colors::ACCENT_RED);
+                                                }
+                                            }
+                                        } else {
+                                            match export_image_to_file(rgba, img_info.width, img_info.height, &dest) {
+                                                Ok(()) => {
+                                                    let fname = dest.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                                                    self.notify(format!("Saved image: {}", fname), colors::ACCENT_GREEN);
+                                                }
+                                                Err(err) => {
+                                                    self.notify(format!("Image export failed: {}", err), colors::ACCENT_RED);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else if !has_reader && self.enc_input_path.is_some() {
+                        // Source video: fast Convert & Play button or progress
+                        if let Some(ref status) = self.enc_status {
+                            match status {
+                                WorkerProgress::Progress { current, total, fps, percent } => {
+                                    ui.label(RichText::new(format!("Preparing HAP stream: {}/{} ({:.0}%)", current, total, percent)).color(colors::ACCENT_CYAN));
+                                    ui.add(egui::ProgressBar::new(*percent / 100.0).show_percentage());
+                                    ui.label(format!("{:.0} fps", fps));
+                                    if let Some(ref cancel) = self.enc_cancel {
+                                        if ui.button("Cancel").clicked() {
+                                            cancel.store(true, Ordering::Relaxed);
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    let play_btn = egui::Button::new(RichText::new("Convert & Play (Fast HAP)").strong().size(13.0).color(Color32::WHITE))
+                                        .min_size(Vec2::new(210.0, 26.0))
+                                        .fill(colors::ACCENT_BLUE)
+                                        .corner_radius(CornerRadius::same(5));
+                                    if ui.add(play_btn).on_hover_text("Fast pure-Rust transcode into HAP MOV and begin 60+ FPS playback immediately").clicked() {
+                                        self.start_quick_encode_and_play();
+                                    }
+                                    if ui.button("Settings... (Ctrl+E)").clicked() {
+                                        self.show_transcode_window = true;
+                                    }
+                                }
+                            }
+                        } else {
+                            let play_btn = egui::Button::new(RichText::new("Convert & Play (Fast HAP)").strong().size(13.0).color(Color32::WHITE))
+                                .min_size(Vec2::new(210.0, 26.0))
+                                .fill(colors::ACCENT_BLUE)
+                                .corner_radius(CornerRadius::same(5));
+                            if ui.add(play_btn).on_hover_text("Fast pure-Rust transcode into HAP MOV and begin 60+ FPS playback immediately").clicked() {
+                                self.start_quick_encode_and_play();
+                            }
+                            if ui.button("Settings... (Ctrl+E)").clicked() {
+                                self.show_transcode_window = true;
+                            }
+                        }
+                    } else {
+                        // Standard player transport buttons
+                        if ui.add_enabled(has_reader && count > 0, egui::Button::new("|<").min_size(Vec2::new(30.0, 26.0))).on_hover_text("Jump to Start (Home)").clicked() {
+                            self.current_frame = 0;
+                            self.update_preview_frame(&ctx);
+                        }
+                        if ui.add_enabled(has_reader && count > 0, egui::Button::new("-10").min_size(Vec2::new(36.0, 26.0))).on_hover_text("Step -10 Frames (Shift+Left)").clicked() {
+                            self.current_frame = self.current_frame.saturating_sub(10);
+                            self.update_preview_frame(&ctx);
+                        }
+                        if ui.add_enabled(has_reader && count > 0, egui::Button::new("<").min_size(Vec2::new(30.0, 26.0))).on_hover_text("Step -1 Frame (Left)").clicked() {
+                            self.current_frame = self.current_frame.saturating_sub(1);
+                            self.update_preview_frame(&ctx);
+                        }
+
+                        let play_text = if self.is_playing { "Pause" } else { "Play" };
+                        let play_btn = egui::Button::new(RichText::new(play_text).strong().size(12.5))
+                            .fill(if self.is_playing { colors::ACCENT_AMBER } else { colors::ACCENT_BLUE })
+                            .corner_radius(CornerRadius::same(5));
+                        let play_hover = if has_reader {
+                            "Play/Pause (Space)"
+                        } else {
+                            "Open Media to Play (Ctrl+O)"
+                        };
+                        if ui.add_sized([76.0, 26.0], play_btn).on_hover_text(play_hover).clicked() {
+                            if has_reader {
+                                self.is_playing = !self.is_playing;
+                                self.last_frame_time = Instant::now();
+                            } else if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("All Media", &["mov", "mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts", "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
+                                .add_filter("QuickTime HAP Videos (*.mov)", &["mov"])
+                                .add_filter("Video Files (*.mp4, *.mkv, *.webm, *.mxf, *.avi)", &["mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts"])
+                                .add_filter("Still Images (*.png, *.jpg, *.tiff, *.webp, *.bmp)", &["png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
+                                .pick_file()
+                            {
+                                self.open_media_file(path, &ctx);
+                            }
+                        }
+
+                        if ui.add_enabled(has_reader && count > 0, egui::Button::new(">").min_size(Vec2::new(30.0, 26.0))).on_hover_text("Step +1 Frame (Right)").clicked() {
+                            if self.current_frame + 1 < count {
                                 self.current_frame += 1;
                                 self.update_preview_frame(&ctx);
                             }
                         }
-                        ui.close();
-                    }
-
-                    if ui.add_enabled(is_loaded, egui::Button::new("Step -10 Frames (Shift+Left)")).clicked() {
-                        self.current_frame = self.current_frame.saturating_sub(10);
-                        self.update_preview_frame(&ctx);
-                        ui.close();
-                    }
-
-                    if ui.add_enabled(is_loaded, egui::Button::new("Step +10 Frames (Shift+Right)")).clicked() {
-                        if let Some(ref r) = self.reader {
-                            self.current_frame = (self.current_frame + 10).min(r.frame_count().saturating_sub(1));
+                        if ui.add_enabled(has_reader && count > 0, egui::Button::new("+10").min_size(Vec2::new(36.0, 26.0))).on_hover_text("Step +10 Frames (Shift+Right)").clicked() {
+                            self.current_frame = (self.current_frame + 10).min(count.saturating_sub(1));
                             self.update_preview_frame(&ctx);
                         }
-                        ui.close();
-                    }
-
-                    ui.separator();
-
-                    if ui.add_enabled(is_loaded, egui::Button::new("Jump to Start (Home)")).clicked() {
-                        self.current_frame = 0;
-                        self.update_preview_frame(&ctx);
-                        ui.close();
-                    }
-
-                    if ui.add_enabled(is_loaded, egui::Button::new("Jump to End (End)")).clicked() {
-                        if let Some(ref r) = self.reader {
-                            self.current_frame = r.frame_count().saturating_sub(1);
+                        if ui.add_enabled(has_reader && count > 0, egui::Button::new(">|").min_size(Vec2::new(30.0, 26.0))).on_hover_text("Jump to End (End)").clicked() {
+                            self.current_frame = count.saturating_sub(1);
                             self.update_preview_frame(&ctx);
                         }
-                        ui.close();
-                    }
 
-                    ui.separator();
-
-                    let loop_str = if self.loop_playback { "Loop: On (L)" } else { "Loop: Off (L)" };
-                    if ui.button(loop_str).clicked() {
-                        self.loop_playback = !self.loop_playback;
-                        ui.close();
-                    }
-                });
-
-                // --- MENU: VIEW ---
-                ui.menu_button("View", |ui: &mut egui::Ui| {
-                    ui.label(RichText::new("Color Channels").color(colors::TEXT_MUTED).size(11.0));
-                    if ui.selectable_value(&mut self.channel_mode, ChannelViewMode::Rgba, "RGBA Composite (1)").clicked() {
-                        self.refresh_channel_view(&ctx);
-                    }
-                    if ui.selectable_value(&mut self.channel_mode, ChannelViewMode::RgbOpaque, "RGB Only (2)").clicked() {
-                        self.refresh_channel_view(&ctx);
-                    }
-                    if ui.selectable_value(&mut self.channel_mode, ChannelViewMode::AlphaMatte, "Alpha Matte (3)").clicked() {
-                        self.refresh_channel_view(&ctx);
-                    }
-
-                    ui.separator();
-                    ui.label(RichText::new("Canvas Background").color(colors::TEXT_MUTED).size(11.0));
-                    ui.selectable_value(&mut self.bg_mode, BackgroundViewMode::Checkerboard, "Checkerboard");
-                    ui.selectable_value(&mut self.bg_mode, BackgroundViewMode::Dark, "Carbon Dark");
-                    ui.selectable_value(&mut self.bg_mode, BackgroundViewMode::Light, "Studio Light");
-
-                    ui.separator();
-                    let hud_text = if self.show_hud_overlay { "Hide Telemetry HUD (I)" } else { "Show Telemetry HUD (I)" };
-                    if ui.button(hud_text).clicked() {
-                        self.show_hud_overlay = !self.show_hud_overlay;
-                        ui.close();
-                    }
-
-                    ui.separator();
-                    ui.checkbox(&mut self.show_ambient_glow, "Ambient Light Glow");
-                });
-
-                // --- MENU: TOOLS ---
-                ui.menu_button("Tools", |ui: &mut egui::Ui| {
-                    if ui.button("Transcode to HAP MOV... (Ctrl+E)").clicked() {
-                        self.show_transcode_window = true;
-                        ui.close();
-                    }
-
-                    if ui.button("Hardware Benchmark Suite... (Ctrl+B)").clicked() {
-                        self.show_benchmark_window = true;
-                        ui.close();
-                    }
-
-                    let can_audit = self.reader.is_some();
-                    if ui.add_enabled(can_audit, egui::Button::new("Stream Integrity & Fault Audit (Ctrl+T)")).clicked() {
-                        self.show_audit_window = true;
-                        ui.close();
-                    }
-
-                    if ui.button("System Diagnostics & GPU (Ctrl+D)").clicked() {
-                        self.show_diagnostics_window = true;
-                        ui.close();
-                    }
-                });
-
-                // --- MENU: HELP ---
-                ui.menu_button("Help", |ui: &mut egui::Ui| {
-                    if ui.button("Keyboard Shortcuts (F1)").clicked() {
-                        self.show_shortcuts_window = true;
-                        ui.close();
-                    }
-                    if ui.button("About HapLab").clicked() {
-                        self.show_about_window = true;
-                        ui.close();
-                    }
-                });
-
-                // --- RIGHT-ALIGNED STATUS & QUICK BUTTONS ---
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui: &mut egui::Ui| {
-                    // Quick action buttons
-                    if ui.add(egui::Button::new(RichText::new("Diagnostics").size(12.0)).min_size(Vec2::new(82.0, 26.0))).clicked() {
-                        self.show_diagnostics_window = !self.show_diagnostics_window;
-                    }
-                    if ui.add(egui::Button::new(RichText::new("Benchmark").size(12.0)).min_size(Vec2::new(80.0, 26.0))).clicked() {
-                        self.show_benchmark_window = !self.show_benchmark_window;
-                    }
-                    if self.reader.is_some() {
-                        if ui.add(egui::Button::new(RichText::new("Audit").size(12.0)).min_size(Vec2::new(55.0, 26.0))).clicked() {
-                            self.show_audit_window = !self.show_audit_window;
+                        let loop_text = if self.loop_playback { "Loop: On" } else { "Loop: Off" };
+                        if ui.add(egui::Button::new(loop_text).min_size(Vec2::new(72.0, 26.0))).on_hover_text("Toggle Looping (L)").clicked() {
+                            self.loop_playback = !self.loop_playback;
                         }
                     }
 
-                    let trans_btn = egui::Button::new(RichText::new("Transcode").strong().size(12.5).color(Color32::WHITE))
-                        .min_size(Vec2::new(86.0, 26.0))
-                        .fill(colors::ACCENT_BLUE)
-                        .corner_radius(CornerRadius::same(5));
-                    if ui.add(trans_btn).on_hover_text("Open Transcode & Ingest Panel (Ctrl+E)").clicked() {
-                        self.show_transcode_window = !self.show_transcode_window;
-                    }
-
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.add_space(10.0);
-
-                    // Active media status badges
-                    if let Some(ref reader) = self.reader {
-                        render_badge(ui, reader.format().name(), colors::BG_ELEVATED, colors::ACCENT_CYAN);
-                        render_badge(ui, &format!("{}x{}", reader.width(), reader.height()), colors::BG_ELEVATED, colors::TEXT_PRIMARY);
-                        render_badge(ui, &format!("{:.0} FPS", reader.fps()), colors::BG_ELEVATED, colors::TEXT_MUTED);
-                    } else if let Some(ref img) = self.still_image_info {
-                        render_badge(ui, "Still Image", colors::BG_ELEVATED, colors::ACCENT_CYAN);
-                        render_badge(ui, &format!("{}x{}", img.width, img.height), colors::BG_ELEVATED, colors::TEXT_PRIMARY);
-                    } else if let Some(ref codec) = self.enc_detected_codec {
-                        render_badge(ui, codec, colors::BG_ELEVATED, colors::ACCENT_CYAN);
-                        if self.enc_detected_w > 0 {
-                            render_badge(ui, &format!("{}x{}", self.enc_detected_w, self.enc_detected_h), colors::BG_ELEVATED, colors::TEXT_PRIMARY);
+                    // Right: Channel & Background & Exporter buttons
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if has_reader {
+                            let exp_text = if self.show_export_panel { "Hide Exporter" } else { "Export Frames..." };
+                            if ui.add(egui::Button::new(exp_text).min_size(Vec2::new(110.0, 26.0))).clicked() {
+                                self.show_export_panel = !self.show_export_panel;
+                            }
                         }
-                    }
+
+                        ui.add_space(4.0);
+
+                        // Background quick picker
+                        egui::ComboBox::from_id_salt("bottom_bg_combo")
+                            .selected_text(match self.bg_mode {
+                                BackgroundViewMode::Checkerboard => "Checker",
+                                BackgroundViewMode::Dark => "Dark",
+                                BackgroundViewMode::Light => "Light",
+                            })
+                            .width(68.0)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.bg_mode, BackgroundViewMode::Checkerboard, "Checkerboard");
+                                ui.selectable_value(&mut self.bg_mode, BackgroundViewMode::Dark, "Dark");
+                                ui.selectable_value(&mut self.bg_mode, BackgroundViewMode::Light, "Light");
+                            });
+
+                        // Channel quick picker
+                        let old_chan = self.channel_mode;
+                        egui::ComboBox::from_id_salt("bottom_chan_combo")
+                            .selected_text(match self.channel_mode {
+                                ChannelViewMode::Rgba => "RGBA",
+                                ChannelViewMode::AlphaMatte => "Alpha",
+                                ChannelViewMode::RgbOpaque => "RGB",
+                            })
+                            .width(68.0)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.channel_mode, ChannelViewMode::Rgba, "RGBA (1)");
+                                ui.selectable_value(&mut self.channel_mode, ChannelViewMode::RgbOpaque, "RGB (2)");
+                                ui.selectable_value(&mut self.channel_mode, ChannelViewMode::AlphaMatte, "Alpha (3)");
+                            });
+                        if old_chan != self.channel_mode {
+                            self.refresh_channel_view(&ctx);
+                        }
+                    });
                 });
+
+                // Collapsible Frame Exporter
+                if has_reader && self.show_export_panel {
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.strong("Frame Exporter:");
+                        ui.label("Format:");
+                        egui::ComboBox::from_id_salt("export_fmt_box")
+                            .selected_text(&self.export_format)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.export_format, "png".into(), "PNG (.png)");
+                                ui.selectable_value(&mut self.export_format, "jpg".into(), "JPEG (.jpg)");
+                                ui.selectable_value(&mut self.export_format, "tiff".into(), "TIFF (.tiff)");
+                                ui.selectable_value(&mut self.export_format, "webp".into(), "WebP (.webp)");
+                                ui.selectable_value(&mut self.export_format, "bmp".into(), "BMP (.bmp)");
+                            });
+
+                        if ui.add(egui::Button::new(RichText::new("Choose Destination & Export").strong()).min_size(Vec2::new(190.0, 26.0))).clicked() {
+                            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                                if let Some(ref path) = self.mov_path {
+                                    self.last_export_dir = Some(folder.clone());
+                                    let cancel_flag = Arc::new(AtomicBool::new(false));
+                                    let (tx, rx) = crossbeam_channel::unbounded();
+                                    self.export_rx = Some(rx);
+                                    self.export_cancel = Some(cancel_flag.clone());
+                                    spawn_export_worker(path.clone(), folder, self.export_format.clone(), cancel_flag, tx);
+                                }
+                            }
+                        }
+
+                        if let Some(ref status) = self.export_status {
+                            match status {
+                                WorkerProgress::Progress { current, total, percent, .. } => {
+                                    ui.label(format!("{}/{} frames", current, total));
+                                    ui.add(egui::ProgressBar::new(*percent / 100.0).show_percentage());
+                                    if let Some(ref cancel) = self.export_cancel {
+                                        if ui.button("Cancel").clicked() {
+                                            cancel.store(true, Ordering::Relaxed);
+                                        }
+                                    }
+                                }
+                                WorkerProgress::Finished { message } => {
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::new(message).color(colors::ACCENT_GREEN));
+                                        if let Some(ref dir) = self.last_export_dir {
+                                            if ui.button("Reveal Folder").clicked() {
+                                                reveal_in_file_manager(dir);
+                                            }
+                                        }
+                                    });
+                                }
+                                WorkerProgress::Error(err) => {
+                                    ui.label(RichText::new(err).color(colors::ACCENT_RED));
+                                }
+                                _ => {}
+                            }
+                        }
+                    });
+                }
+
+                // Toast bar at bottom of transport
+                if let Some((ref msg, time, color)) = self.toast {
+                    if time.elapsed().as_secs_f32() < 4.0 {
+                        ui.add_space(2.0);
+                        ui.label(RichText::new(msg).color(color).strong().size(12.0));
+                    } else {
+                        self.toast = None;
+                    }
+                }
             });
-        });
-
-        ui.add_space(4.0);
 
         // ===================================================================
-        // 2. CENTRAL MAIN CANVAS (PLAYER VIEWPORT)
+        // 3. CENTRAL MAIN CANVAS (PLAYER VIEWPORT)
+        // OCCUPIES REMAINING VIEWPORT SPACE BETWEEN TOP AND BOTTOM PANELS
         // ===================================================================
-        let canvas_height = ui.available_height() - 95.0; // Reserve permanent room for bottom transport bar
-
         let canvas_frame = if has_media {
-            egui::Frame::canvas(ui.style())
+            egui::Frame::new()
                 .fill(colors::BG_APP)
                 .inner_margin(egui::Margin::same(8))
         } else {
@@ -1408,353 +1764,116 @@ impl eframe::App for HapLabApp {
                 .fill(Color32::TRANSPARENT)
                 .stroke(Stroke::NONE)
                 .inner_margin(egui::Margin::ZERO)
-                .corner_radius(CornerRadius::ZERO)
         };
 
-        canvas_frame.show(ui, |ui: &mut egui::Ui| {
-            ui.set_height(canvas_height);
-            let has_media = self.reader.is_some() || self.preview_texture.is_some();
+        egui::CentralPanel::default()
+            .frame(canvas_frame)
+            .show(ui, |ui: &mut egui::Ui| {
+                let has_media = self.reader.is_some() || self.preview_texture.is_some();
 
-            if has_media {
-                let available_size = ui.available_size();
-                let (content_w, content_h) = if let Some(ref r) = self.reader {
-                    (r.width() as f32, r.height() as f32)
-                } else if let Some(ref img) = self.still_image_info {
-                    (img.width as f32, img.height as f32)
-                } else if self.enc_detected_w > 0 && self.enc_detected_h > 0 {
-                    (self.enc_detected_w as f32, self.enc_detected_h as f32)
-                } else {
-                    (16.0, 9.0)
-                };
-
-                let aspect = content_w / content_h.max(1.0);
-                let target_w = available_size.x;
-                let target_h = (target_w / aspect).min(available_size.y);
-                let final_w = (target_h * aspect).min(available_size.x);
-                let final_h = target_h;
-
-                ui.vertical_centered(|ui| {
-                    let (rect, _response) = ui.allocate_exact_size(Vec2::new(final_w, final_h), egui::Sense::hover());
-
-                    // Paint Canvas Background
-                    match self.bg_mode {
-                        BackgroundViewMode::Checkerboard => {
-                            paint_transparency_checkerboard(ui.painter(), rect);
-                        }
-                        BackgroundViewMode::Dark => {
-                            ui.painter().rect_filled(rect, 0, Color32::from_rgb(12, 14, 18));
-                        }
-                        BackgroundViewMode::Light => {
-                            ui.painter().rect_filled(rect, 0, Color32::from_rgb(180, 185, 195));
-                        }
-                    }
-
-                    // Paint Media Frame
-                    if let Some(ref texture) = self.preview_texture {
-                        ui.painter().image(
-                            texture.id(),
-                            rect,
-                            Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                            Color32::WHITE,
-                        );
-                    }
-
-                    // Canvas border
-                    ui.painter().rect_stroke(rect, 0, Stroke::new(1.0, colors::BORDER_SUBTLE), egui::StrokeKind::Inside);
-
-                    // Floating Stream Telemetry HUD (Top-Left of canvas)
-                    if self.show_hud_overlay && self.reader.is_some() {
-                        let hud_rect = Rect::from_min_size(
-                            rect.min + Vec2::new(12.0, 12.0),
-                            Vec2::new(260.0, 130.0),
-                        );
-                        ui.painter().rect_filled(
-                            hud_rect,
-                            CornerRadius::same(6),
-                            Color32::from_rgba_premultiplied(16, 20, 28, 220),
-                        );
-                        ui.painter().rect_stroke(
-                            hud_rect,
-                            CornerRadius::same(6),
-                            Stroke::new(1.0, colors::BORDER_SUBTLE),
-                            egui::StrokeKind::Inside,
-                        );
-
-                        let mut hud_ui = ui.new_child(
-                            egui::UiBuilder::new()
-                                .max_rect(hud_rect.shrink(10.0))
-                                .layout(egui::Layout::top_down(egui::Align::Min)),
-                        );
-
-                        if let Some(ref r) = self.reader {
-                            hud_ui.horizontal(|ui| {
-                                ui.strong(RichText::new(r.format().name()).color(colors::ACCENT_CYAN).size(13.0));
-                                ui.label(RichText::new(format!("{}x{}", r.width(), r.height())).color(colors::TEXT_PRIMARY).size(12.0));
-                            });
-                            hud_ui.add_space(4.0);
-                            let instant_fps = if self.last_decode_ms > 0.0 { 1000.0 / self.last_decode_ms } else { 0.0 };
-                            hud_ui.label(RichText::new(format!("Decode: {:.2} ms (~{:.0} FPS)", self.last_decode_ms, instant_fps)).color(colors::ACCENT_GREEN).size(11.5));
-
-                            if let Some(ref s) = self.stream_summary {
-                                hud_ui.label(RichText::new(format!("Bitrate: {:.2} Mbps | Frame: {}", s.avg_bitrate_mbps, format_bytes(self.last_packet_bytes as u64))).color(colors::TEXT_MUTED).size(11.0));
-                                hud_ui.label(RichText::new(format!("Texture: {}", if self.gpu_supports_bc { "Hardware Direct BC Upload" } else { "CPU Software Fallback" })).color(colors::TEXT_FAINT).size(10.5));
-                            }
-                        }
-                    }
-
-                    // Floating Source Video Banner (if non-HAP source loaded)
-                });
-            } else if !self.is_loading_media {
-                // --- CLICK-ANYWHERE PLAYBACK AREA ---
-                let available_size = ui.available_size();
-                let (_canvas_rect, resp) = ui.allocate_exact_size(available_size, egui::Sense::click());
-
-                if resp.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                }
-
-                if resp.clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("All Media", &["mov", "mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts", "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
-                        .add_filter("QuickTime HAP Videos (*.mov)", &["mov"])
-                        .add_filter("Video Files (*.mp4, *.mkv, *.webm, *.mxf, *.avi)", &["mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts"])
-                        .add_filter("Still Images (*.png, *.jpg, *.tiff, *.webp, *.bmp)", &["png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
-                        .pick_file()
-                    {
-                        self.open_media_file(path, &ctx);
-                    }
-                }
-            }
-
-            if self.is_loading_media {
-                let center = ui.max_rect().center();
-                let loading_rect = Rect::from_center_size(center, Vec2::new(260.0, 52.0));
-                ui.painter().rect_filled(
-                    loading_rect,
-                    CornerRadius::same(10),
-                    Color32::from_rgba_premultiplied(18, 22, 32, 230),
-                );
-                ui.painter().rect_stroke(
-                    loading_rect,
-                    CornerRadius::same(10),
-                    Stroke::new(1.0, Color32::from_rgba_premultiplied(90, 110, 160, 140)),
-                    egui::StrokeKind::Inside,
-                );
-                let mut loading_ui = ui.new_child(
-                    egui::UiBuilder::new()
-                        .max_rect(loading_rect.shrink(10.0))
-                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
-                );
-                loading_ui.spinner();
-                loading_ui.add_space(8.0);
-                loading_ui.label(
-                    RichText::new(format!("Loading {}...", self.loading_filename))
-                        .size(13.0)
-                        .color(Color32::WHITE)
-                        .strong(),
-                );
-            }
-        });
-
-        // ===================================================================
-        // 3. BOTTOM TRANSPORT BAR & STATUS (PERMANENT)
-        // ===================================================================
-        ui.add_space(4.0);
-
-        let transport_frame = egui::Frame::canvas(ui.style())
-            .fill(colors::BG_CARD)
-            .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
-            .inner_margin(egui::Margin::symmetric(18, 8));
-
-        transport_frame.show(ui, |ui| {
-            let has_reader = self.reader.is_some();
-            let is_still_image = self.still_image_info.is_some();
-            let (count, fps) = if let Some(ref reader) = self.reader {
-                (reader.frame_count(), reader.fps().max(1.0))
-            } else if is_still_image {
-                (1, 30.0)
-            } else if self.enc_detected_frames > 0 {
-                (self.enc_detected_frames, self.enc_fps.max(1.0))
-            } else {
-                (0, 30.0)
-            };
-            let max_frame = count.saturating_sub(1);
-
-            // Scrubber slider across top of bottom panel
-            let old_frame = self.current_frame;
-            let slider = egui::Slider::new(&mut self.current_frame, 0..=max_frame)
-                .show_value(false)
-                .trailing_fill(true);
-            ui.add_enabled_ui(has_reader && count > 0, |ui| {
-                ui.add_sized([ui.available_width(), 18.0], slider);
-            });
-
-            if has_reader && old_frame != self.current_frame {
-                self.update_preview_frame(&ctx);
-            }
-
-            ui.add_space(4.0);
-
-            // Transport controls & details row
-            ui.horizontal(|ui| {
-                // Left: SMPTE timecode and frame counter
-                let timecode = if has_reader {
-                    format_smpte_timecode(self.current_frame, fps)
-                } else if is_still_image {
-                    "00:00:00:01".to_string()
-                } else {
-                    "00:00:00:00".to_string()
-                };
-                let tc_color = if has_reader || is_still_image { colors::ACCENT_CYAN } else { colors::TEXT_FAINT };
-                ui.label(RichText::new(timecode).monospace().size(14.0).color(tc_color).strong());
-
-                if has_reader {
-                    let pct = if count > 0 { (self.current_frame as f32 / count as f32) * 100.0 } else { 0.0 };
-                    ui.monospace(format!("{}/{} ({:.0}%)", self.current_frame + 1, count, pct));
-                } else if is_still_image {
-                    ui.monospace("1/1 (Image)");
-                } else if count > 0 {
-                    ui.monospace(format!("0/{} (Source)", count));
-                } else {
-                    ui.monospace("0/0 (0%)");
-                }
-
-                ui.add_space(10.0);
-
-                // Center: Controls based on media state
-                if is_still_image {
-                    // Still Image: Instant Conversion & Export
-                    ui.label("Format:");
-                    egui::ComboBox::from_id_salt("img_export_combo")
-                        .selected_text(match self.still_image_export_format.as_str() {
-                            "mov" => "HAP MOV (.mov)",
-                            "png" => "PNG (.png)",
-                            "jpg" => "JPEG (.jpg)",
-                            "tiff" => "TIFF (.tiff)",
-                            "webp" => "WebP (.webp)",
-                            "bmp" => "BMP (.bmp)",
-                            _ => "HAP MOV (.mov)",
-                        })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.still_image_export_format, "mov".into(), "HAP MOV (.mov)");
-                            ui.selectable_value(&mut self.still_image_export_format, "png".into(), "PNG (.png)");
-                            ui.selectable_value(&mut self.still_image_export_format, "jpg".into(), "JPEG (.jpg)");
-                            ui.selectable_value(&mut self.still_image_export_format, "tiff".into(), "TIFF (.tiff)");
-                            ui.selectable_value(&mut self.still_image_export_format, "webp".into(), "WebP (.webp)");
-                            ui.selectable_value(&mut self.still_image_export_format, "bmp".into(), "BMP (.bmp)");
-                        });
-
-                    let convert_btn = egui::Button::new(RichText::new("Convert / Save Image...").strong().color(Color32::WHITE))
-                        .min_size(Vec2::new(170.0, 26.0))
-                        .fill(colors::ACCENT_BLUE);
-                    if ui.add(convert_btn).on_hover_text("Convert and save this image to HAP MOV or other image formats").clicked() {
-                        if let Some(ref img_info) = self.still_image_info {
-                            let ext = self.still_image_export_format.clone();
-                            let default_name = img_info.path.file_stem()
-                                .map(|s| format!("{}_converted.{}", s.to_string_lossy(), ext))
-                                .unwrap_or_else(|| format!("converted.{}", ext));
-
-                            let mut dialog = rfd::FileDialog::new().set_file_name(&default_name);
-                            if let Some(parent) = img_info.path.parent() {
-                                dialog = dialog.set_directory(parent);
-                            }
-
-                            if let Some(dest) = dialog.pick_file() {
-                                if let Some(ref rgba) = self.raw_frame_cache {
-                                    if ext == "mov" {
-                                        match export_image_to_hap_mov(rgba, img_info.width, img_info.height, &dest, HapFormat::HapY, true) {
-                                            Ok(()) => {
-                                                let fname = dest.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-                                                self.notify(format!("Saved HAP MOV: {}", fname), colors::ACCENT_GREEN);
-                                                self.open_media_file(dest, &ctx);
-                                            }
-                                            Err(err) => {
-                                                self.notify(format!("HAP export failed: {}", err), colors::ACCENT_RED);
-                                            }
-                                        }
-                                    } else {
-                                        match export_image_to_file(rgba, img_info.width, img_info.height, &dest) {
-                                            Ok(()) => {
-                                                let fname = dest.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-                                                self.notify(format!("Saved image: {}", fname), colors::ACCENT_GREEN);
-                                            }
-                                            Err(err) => {
-                                                self.notify(format!("Image export failed: {}", err), colors::ACCENT_RED);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else if !has_reader && self.enc_input_path.is_some() {
-                    // Source video: fast Convert & Play button or progress
-                    if let Some(ref status) = self.enc_status {
-                        match status {
-                            WorkerProgress::Progress { current, total, fps, percent } => {
-                                ui.label(RichText::new(format!("Preparing HAP stream: {}/{} ({:.0}%)", current, total, percent)).color(colors::ACCENT_CYAN));
-                                ui.add(egui::ProgressBar::new(*percent / 100.0).show_percentage());
-                                ui.label(format!("{:.0} fps", fps));
-                                if let Some(ref cancel) = self.enc_cancel {
-                                    if ui.button("Cancel").clicked() {
-                                        cancel.store(true, Ordering::Relaxed);
-                                    }
-                                }
-                            }
-                            _ => {
-                                let play_btn = egui::Button::new(RichText::new("▶ Convert & Play (Fast HAP)").strong().size(13.0).color(Color32::WHITE))
-                                    .min_size(Vec2::new(210.0, 26.0))
-                                    .fill(colors::ACCENT_BLUE)
-                                    .corner_radius(CornerRadius::same(5));
-                                if ui.add(play_btn).on_hover_text("Fast pure-Rust transcode into HAP MOV and begin 60+ FPS playback immediately").clicked() {
-                                    self.start_quick_encode_and_play();
-                                }
-                                if ui.button("Settings... (Ctrl+E)").clicked() {
-                                    self.show_transcode_window = true;
-                                }
-                            }
-                        }
+                if has_media {
+                    let available_size = ui.available_size();
+                    let (content_w, content_h) = if let Some(ref r) = self.reader {
+                        (r.width() as f32, r.height() as f32)
+                    } else if let Some(ref img) = self.still_image_info {
+                        (img.width as f32, img.height as f32)
+                    } else if self.enc_detected_w > 0 && self.enc_detected_h > 0 {
+                        (self.enc_detected_w as f32, self.enc_detected_h as f32)
                     } else {
-                        let play_btn = egui::Button::new(RichText::new("▶ Convert & Play (Fast HAP)").strong().size(13.0).color(Color32::WHITE))
-                            .min_size(Vec2::new(210.0, 26.0))
-                            .fill(colors::ACCENT_BLUE)
-                            .corner_radius(CornerRadius::same(5));
-                        if ui.add(play_btn).on_hover_text("Fast pure-Rust transcode into HAP MOV and begin 60+ FPS playback immediately").clicked() {
-                            self.start_quick_encode_and_play();
-                        }
-                        if ui.button("Settings... (Ctrl+E)").clicked() {
-                            self.show_transcode_window = true;
-                        }
-                    }
-                } else {
-                    // Standard player transport buttons
-                    if ui.add_enabled(has_reader && count > 0, egui::Button::new("|<").min_size(Vec2::new(30.0, 26.0))).on_hover_text("Jump to Start (Home)").clicked() {
-                        self.current_frame = 0;
-                        self.update_preview_frame(&ctx);
-                    }
-                    if ui.add_enabled(has_reader && count > 0, egui::Button::new("-10").min_size(Vec2::new(36.0, 26.0))).on_hover_text("Step -10 Frames (Shift+Left)").clicked() {
-                        self.current_frame = self.current_frame.saturating_sub(10);
-                        self.update_preview_frame(&ctx);
-                    }
-                    if ui.add_enabled(has_reader && count > 0, egui::Button::new("<").min_size(Vec2::new(30.0, 26.0))).on_hover_text("Step -1 Frame (Left)").clicked() {
-                        self.current_frame = self.current_frame.saturating_sub(1);
-                        self.update_preview_frame(&ctx);
-                    }
-
-                    let play_text = if self.is_playing { "Pause" } else { "Play" };
-                    let play_btn = egui::Button::new(RichText::new(play_text).strong().size(12.5))
-                        .fill(if self.is_playing { colors::ACCENT_AMBER } else { colors::ACCENT_BLUE })
-                        .corner_radius(CornerRadius::same(5));
-                    let play_hover = if has_reader {
-                        "Play/Pause (Space)"
-                    } else {
-                        "Open Media to Play (Ctrl+O)"
+                        (16.0, 9.0)
                     };
-                    if ui.add_sized([76.0, 26.0], play_btn).on_hover_text(play_hover).clicked() {
-                        if has_reader {
-                            self.is_playing = !self.is_playing;
-                            self.last_frame_time = Instant::now();
-                        } else if let Some(path) = rfd::FileDialog::new()
+
+                    let aspect = content_w / content_h.max(1.0);
+                    let target_w = available_size.x;
+                    let target_h = (target_w / aspect).min(available_size.y);
+                    let final_w = (target_h * aspect).min(available_size.x);
+                    let final_h = target_h;
+
+                    let y_padding = ((available_size.y - final_h) * 0.5).max(0.0);
+                    if y_padding > 0.0 {
+                        ui.add_space(y_padding);
+                    }
+
+                    ui.vertical_centered(|ui| {
+                        let (rect, _response) = ui.allocate_exact_size(Vec2::new(final_w, final_h), egui::Sense::hover());
+
+                        // Paint Canvas Background
+                        match self.bg_mode {
+                            BackgroundViewMode::Checkerboard => {
+                                paint_transparency_checkerboard(ui.painter(), rect);
+                            }
+                            BackgroundViewMode::Dark => {
+                                ui.painter().rect_filled(rect, 0, Color32::from_rgb(12, 14, 18));
+                            }
+                            BackgroundViewMode::Light => {
+                                ui.painter().rect_filled(rect, 0, Color32::from_rgb(180, 185, 195));
+                            }
+                        }
+
+                        // Paint Media Frame
+                        if let Some(ref texture) = self.preview_texture {
+                            ui.painter().image(
+                                texture.id(),
+                                rect,
+                                Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                                Color32::WHITE,
+                            );
+                        }
+
+                        // Canvas border
+                        ui.painter().rect_stroke(rect, 0, Stroke::new(1.0, colors::BORDER_SUBTLE), egui::StrokeKind::Inside);
+
+                        // Floating Stream Telemetry HUD (Top-Left of canvas)
+                        if self.show_hud_overlay && self.reader.is_some() {
+                            let hud_rect = Rect::from_min_size(
+                                rect.min + Vec2::new(12.0, 12.0),
+                                Vec2::new(260.0, 130.0),
+                            );
+                            ui.painter().rect_filled(
+                                hud_rect,
+                                CornerRadius::same(6),
+                                Color32::from_rgba_premultiplied(16, 20, 28, 220),
+                            );
+                            ui.painter().rect_stroke(
+                                hud_rect,
+                                CornerRadius::same(6),
+                                Stroke::new(1.0, colors::BORDER_SUBTLE),
+                                egui::StrokeKind::Inside,
+                            );
+
+                            let mut hud_ui = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(hud_rect.shrink(10.0))
+                                    .layout(egui::Layout::top_down(egui::Align::Min)),
+                            );
+
+                            if let Some(ref r) = self.reader {
+                                hud_ui.horizontal(|ui| {
+                                    ui.strong(RichText::new(r.format().name()).color(colors::ACCENT_CYAN).size(13.0));
+                                    ui.label(RichText::new(format!("{}x{}", r.width(), r.height())).color(colors::TEXT_PRIMARY).size(12.0));
+                                });
+                                hud_ui.add_space(4.0);
+                                let instant_fps = if self.last_decode_ms > 0.0 { 1000.0 / self.last_decode_ms } else { 0.0 };
+                                hud_ui.label(RichText::new(format!("Decode: {:.2} ms (~{:.0} FPS)", self.last_decode_ms, instant_fps)).color(colors::ACCENT_GREEN).size(11.5));
+
+                                if let Some(ref s) = self.stream_summary {
+                                    hud_ui.label(RichText::new(format!("Bitrate: {:.2} Mbps | Frame: {}", s.avg_bitrate_mbps, format_bytes(self.last_packet_bytes as u64))).color(colors::TEXT_MUTED).size(11.0));
+                                    hud_ui.label(RichText::new(format!("Texture: {}", if self.gpu_supports_bc { "Hardware Direct BC Upload" } else { "CPU Software Fallback" })).color(colors::TEXT_FAINT).size(10.5));
+                                }
+                            }
+                        }
+                    });
+                } else if !self.is_loading_media {
+                    // --- CLICK-ANYWHERE PLAYBACK AREA ---
+                    let available_size = ui.available_size();
+                    let (_canvas_rect, resp) = ui.allocate_exact_size(available_size, egui::Sense::click());
+
+                    if resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+
+                    if resp.clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
                             .add_filter("All Media", &["mov", "mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts", "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
                             .add_filter("QuickTime HAP Videos (*.mov)", &["mov"])
                             .add_filter("Video Files (*.mp4, *.mkv, *.webm, *.mxf, *.avi)", &["mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts"])
@@ -1764,144 +1883,37 @@ impl eframe::App for HapLabApp {
                             self.open_media_file(path, &ctx);
                         }
                     }
-
-                    if ui.add_enabled(has_reader && count > 0, egui::Button::new(">").min_size(Vec2::new(30.0, 26.0))).on_hover_text("Step +1 Frame (Right)").clicked() {
-                        if self.current_frame + 1 < count {
-                            self.current_frame += 1;
-                            self.update_preview_frame(&ctx);
-                        }
-                    }
-                    if ui.add_enabled(has_reader && count > 0, egui::Button::new("+10").min_size(Vec2::new(36.0, 26.0))).on_hover_text("Step +10 Frames (Shift+Right)").clicked() {
-                        self.current_frame = (self.current_frame + 10).min(count.saturating_sub(1));
-                        self.update_preview_frame(&ctx);
-                    }
-                    if ui.add_enabled(has_reader && count > 0, egui::Button::new(">|").min_size(Vec2::new(30.0, 26.0))).on_hover_text("Jump to End (End)").clicked() {
-                        self.current_frame = count.saturating_sub(1);
-                        self.update_preview_frame(&ctx);
-                    }
-
-                    let loop_text = if self.loop_playback { "Loop: On" } else { "Loop: Off" };
-                    if ui.add(egui::Button::new(loop_text).min_size(Vec2::new(72.0, 26.0))).on_hover_text("Toggle Looping (L)").clicked() {
-                        self.loop_playback = !self.loop_playback;
-                    }
                 }
 
-                // Right: Channel & Background & Exporter buttons
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if has_reader {
-                        let exp_text = if self.show_export_panel { "Hide Exporter" } else { "Export Frames..." };
-                        if ui.add(egui::Button::new(exp_text).min_size(Vec2::new(110.0, 26.0))).clicked() {
-                            self.show_export_panel = !self.show_export_panel;
-                        }
-                    }
-
-                    ui.add_space(4.0);
-
-                    // Background quick picker
-                    egui::ComboBox::from_id_salt("bottom_bg_combo")
-                        .selected_text(match self.bg_mode {
-                            BackgroundViewMode::Checkerboard => "Checker",
-                            BackgroundViewMode::Dark => "Dark",
-                            BackgroundViewMode::Light => "Light",
-                        })
-                        .width(68.0)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.bg_mode, BackgroundViewMode::Checkerboard, "Checkerboard");
-                            ui.selectable_value(&mut self.bg_mode, BackgroundViewMode::Dark, "Dark");
-                            ui.selectable_value(&mut self.bg_mode, BackgroundViewMode::Light, "Light");
-                        });
-
-                    // Channel quick picker
-                    let old_chan = self.channel_mode;
-                    egui::ComboBox::from_id_salt("bottom_chan_combo")
-                        .selected_text(match self.channel_mode {
-                            ChannelViewMode::Rgba => "RGBA",
-                            ChannelViewMode::AlphaMatte => "Alpha",
-                            ChannelViewMode::RgbOpaque => "RGB",
-                        })
-                        .width(68.0)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.channel_mode, ChannelViewMode::Rgba, "RGBA (1)");
-                            ui.selectable_value(&mut self.channel_mode, ChannelViewMode::RgbOpaque, "RGB (2)");
-                            ui.selectable_value(&mut self.channel_mode, ChannelViewMode::AlphaMatte, "Alpha (3)");
-                        });
-                    if old_chan != self.channel_mode {
-                        self.refresh_channel_view(&ctx);
-                    }
-                });
+                if self.is_loading_media {
+                    let center = ui.max_rect().center();
+                    let loading_rect = Rect::from_center_size(center, Vec2::new(260.0, 52.0));
+                    ui.painter().rect_filled(
+                        loading_rect,
+                        CornerRadius::same(10),
+                        Color32::from_rgba_premultiplied(18, 22, 32, 230),
+                    );
+                    ui.painter().rect_stroke(
+                        loading_rect,
+                        CornerRadius::same(10),
+                        Stroke::new(1.0, Color32::from_rgba_premultiplied(90, 110, 160, 140)),
+                        egui::StrokeKind::Inside,
+                    );
+                    let mut loading_ui = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(loading_rect.shrink(10.0))
+                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                    );
+                    loading_ui.spinner();
+                    loading_ui.add_space(8.0);
+                    loading_ui.label(
+                        RichText::new(format!("Loading {}...", self.loading_filename))
+                            .size(13.0)
+                            .color(Color32::WHITE)
+                            .strong(),
+                    );
+                }
             });
-
-            // Collapsible Frame Exporter
-            if has_reader && self.show_export_panel {
-                ui.add_space(6.0);
-                ui.separator();
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.strong("Frame Exporter:");
-                    ui.label("Format:");
-                    egui::ComboBox::from_id_salt("export_fmt_box")
-                        .selected_text(&self.export_format)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.export_format, "png".into(), "PNG (.png)");
-                            ui.selectable_value(&mut self.export_format, "jpg".into(), "JPEG (.jpg)");
-                            ui.selectable_value(&mut self.export_format, "tiff".into(), "TIFF (.tiff)");
-                            ui.selectable_value(&mut self.export_format, "webp".into(), "WebP (.webp)");
-                            ui.selectable_value(&mut self.export_format, "bmp".into(), "BMP (.bmp)");
-                        });
-
-                    if ui.add(egui::Button::new(RichText::new("Choose Destination & Export").strong()).min_size(Vec2::new(190.0, 26.0))).clicked() {
-                        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                            if let Some(ref path) = self.mov_path {
-                                self.last_export_dir = Some(folder.clone());
-                                let cancel_flag = Arc::new(AtomicBool::new(false));
-                                let (tx, rx) = crossbeam_channel::unbounded();
-                                self.export_rx = Some(rx);
-                                self.export_cancel = Some(cancel_flag.clone());
-                                spawn_export_worker(path.clone(), folder, self.export_format.clone(), cancel_flag, tx);
-                            }
-                        }
-                    }
-
-                    if let Some(ref status) = self.export_status {
-                        match status {
-                            WorkerProgress::Progress { current, total, percent, .. } => {
-                                ui.label(format!("{}/{} frames", current, total));
-                                ui.add(egui::ProgressBar::new(*percent / 100.0).show_percentage());
-                                if let Some(ref cancel) = self.export_cancel {
-                                    if ui.button("Cancel").clicked() {
-                                        cancel.store(true, Ordering::Relaxed);
-                                    }
-                                }
-                            }
-                            WorkerProgress::Finished { message } => {
-                                ui.horizontal(|ui| {
-                                    ui.label(RichText::new(message).color(colors::ACCENT_GREEN));
-                                    if let Some(ref dir) = self.last_export_dir {
-                                        if ui.button("Reveal Folder").clicked() {
-                                            reveal_in_file_manager(dir);
-                                        }
-                                    }
-                                });
-                            }
-                            WorkerProgress::Error(err) => {
-                                ui.label(RichText::new(err).color(colors::ACCENT_RED));
-                            }
-                            _ => {}
-                        }
-                    }
-                });
-            }
-
-            // Toast bar at bottom of transport
-            if let Some((ref msg, time, color)) = self.toast {
-                if time.elapsed().as_secs_f32() < 4.0 {
-                    ui.add_space(2.0);
-                    ui.label(RichText::new(msg).color(color).strong().size(12.0));
-                } else {
-                    self.toast = None;
-                }
-            }
-        });
 
         // ===================================================================
         // 4. FLOATING STUDIO WINDOWS / DIALOGS
