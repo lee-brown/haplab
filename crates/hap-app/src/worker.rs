@@ -2,8 +2,9 @@
 
 use crossbeam_channel::Sender;
 use hap_core::{
-    decode_frame_to_rgba, encode_frame_with_options, AlphaMode, ColorRange, DitherMode,
-    EncodeOptions, HapFormat, QualityPreset, QtHapReader, QtHapWriter, VideoConfig,
+    decode_frame_to_rgba, encode_frame_with_options, extract_stream_summary, AlphaMode, ColorRange,
+    DitherMode, EncodeOptions, HapFormat, QualityPreset, QtHapReader, QtHapWriter, StreamSummary,
+    VideoConfig,
 };
 use image::GenericImageView;
 use std::fs;
@@ -18,6 +19,41 @@ pub enum WorkerProgress {
     Progress { current: usize, total: usize, fps: f32, percent: f32 },
     Finished { message: String },
     Error(String),
+}
+
+/// Result of asynchronous media loading off the main GUI thread.
+pub enum MediaLoadResult {
+    HapVideo {
+        path: PathBuf,
+        reader: QtHapReader,
+        summary: Option<StreamSummary>,
+        first_frame_rgba: Option<Vec<u8>>,
+        first_frame_decode_ms: f32,
+        first_packet_bytes: usize,
+    },
+    StillImage {
+        path: PathBuf,
+        width: usize,
+        height: usize,
+        rgba: Vec<u8>,
+    },
+    GenericVideo {
+        path: PathBuf,
+        probe: VideoProbeInfo,
+    },
+    ImageSequence {
+        path: PathBuf,
+        count: usize,
+        width: usize,
+        height: usize,
+        first_file: Option<PathBuf>,
+        last_file: Option<PathBuf>,
+        thumbnail_rgba: Option<(usize, usize, Vec<u8>)>,
+    },
+    Failed {
+        path: PathBuf,
+        error: String,
+    },
 }
 
 pub struct EncodeJobConfig {
@@ -348,7 +384,12 @@ pub fn spawn_export_worker(
             let out_file = export_dir.join(filename);
 
             if let Some(img) = image::RgbaImage::from_raw(width as u32, height as u32, rgba) {
-                if let Err(e) = img.save(&out_file) {
+                let save_res = if format == "jpg" || format == "jpeg" {
+                    image::DynamicImage::ImageRgba8(img).into_rgb8().save(&out_file)
+                } else {
+                    img.save(&out_file)
+                };
+                if let Err(e) = save_res {
                     let _ = progress_tx.send(WorkerProgress::Error(format!("Failed saving frame {}: {}", i, e)));
                     return;
                 }
@@ -514,6 +555,233 @@ fn spawn_encode_from_video(
     });
 }
 
+/// Check if a path corresponds to a supported still image format.
+pub fn is_image_file(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            matches!(
+                e.to_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "tiff" | "tif" | "bmp" | "webp" | "tga"
+            )
+        })
+        .unwrap_or(false)
+}
+
+/// Ensure RGBA dimensions are multiples of 4 for DXT texture compression.
+/// If already aligned, returns a copy without padding overhead.
+pub fn pad_rgba_to_multiple_of_4(src: &[u8], width: usize, height: usize) -> (usize, usize, Vec<u8>) {
+    let pad_w = (width + 3) & !3;
+    let pad_h = (height + 3) & !3;
+    if pad_w == width && pad_h == height {
+        return (width, height, src.to_vec());
+    }
+    let mut padded = vec![0u8; pad_w * pad_h * 4];
+    for y in 0..height {
+        let src_row = &src[y * width * 4..(y + 1) * width * 4];
+        let dst_row = &mut padded[y * pad_w * 4..y * pad_w * 4 + width * 4];
+        dst_row.copy_from_slice(src_row);
+    }
+    (pad_w, pad_h, padded)
+}
+
+/// Export a still image RGBA buffer to standard image file formats (PNG, JPEG, TIFF, WebP, BMP).
+pub fn export_image_to_file(
+    rgba: &[u8],
+    width: usize,
+    height: usize,
+    dest: &std::path::Path,
+) -> Result<(), String> {
+    let img = image::RgbaImage::from_raw(width as u32, height as u32, rgba.to_vec())
+        .ok_or_else(|| "Failed to construct RGBA image buffer".to_string())?;
+
+    let ext = dest
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    if matches!(ext.as_str(), "jpg" | "jpeg") {
+        let rgb = image::DynamicImage::ImageRgba8(img).into_rgb8();
+        rgb.save(dest)
+            .map_err(|e| format!("Failed to save JPEG: {}", e))
+    } else {
+        img.save(dest)
+            .map_err(|e| format!("Failed to save image: {}", e))
+    }
+}
+
+/// Export a still image RGBA buffer to a QuickTime HAP MOV file using pure Rust encoders.
+pub fn export_image_to_hap_mov(
+    rgba: &[u8],
+    width: usize,
+    height: usize,
+    dest: &std::path::Path,
+    format: HapFormat,
+    snappy: bool,
+) -> Result<(), String> {
+    let (pad_w, pad_h, padded) = pad_rgba_to_multiple_of_4(rgba, width, height);
+    let opts = EncodeOptions {
+        format,
+        quality: QualityPreset::Production,
+        chunk_count: 4,
+        use_snappy: snappy,
+        color_range: ColorRange::Full,
+        alpha_mode: AlphaMode::Straight,
+        dither_mode: DitherMode::None,
+    };
+    let packet = encode_frame_with_options(&padded, pad_w, pad_h, &opts)
+        .map_err(|e| format!("HAP encoding failed: {}", e))?;
+
+    let video_cfg = VideoConfig::new(pad_w as u32, pad_h as u32, 30.0, format);
+    let mut writer = QtHapWriter::create(dest, video_cfg)
+        .map_err(|e| format!("Failed to create MOV file: {}", e))?;
+    writer.write_frame(&packet)
+        .map_err(|e| format!("Failed to write frame: {}", e))?;
+    writer.finalize()
+        .map_err(|e| format!("Failed to finalize MOV file: {}", e))?;
+    Ok(())
+}
+
+/// Asynchronously load media (HAP MOV, Still Image, Generic Video, or Image Sequence)
+/// off the GUI thread to eliminate player freezes.
+pub fn spawn_media_loader(path: PathBuf, tx: Sender<MediaLoadResult>) {
+    std::thread::Builder::new()
+        .name("media-loader".to_string())
+        .spawn(move || {
+            // 1. Directory -> image sequence
+            if path.is_dir() {
+                if let Ok(entries) = fs::read_dir(&path) {
+                    let mut files: Vec<PathBuf> = entries
+                        .flatten()
+                        .map(|e| e.path())
+                        .filter(|p| is_image_file(p))
+                        .collect();
+                    files.sort();
+                    let count = files.len();
+                    let first_file = files.first().cloned();
+                    let last_file = files.last().cloned();
+
+                    let mut thumb_res = None;
+                    let mut w = 0;
+                    let mut h = 0;
+                    if let Some(ref first) = first_file {
+                        if let Ok(img) = image::open(first) {
+                            w = img.width() as usize;
+                            h = img.height() as usize;
+                            let thumb = img.thumbnail(320, 320).to_rgba8();
+                            thumb_res = Some((thumb.width() as usize, thumb.height() as usize, thumb.into_raw()));
+                        }
+                    }
+
+                    let _ = tx.send(MediaLoadResult::ImageSequence {
+                        path,
+                        count,
+                        width: w,
+                        height: h,
+                        first_file,
+                        last_file,
+                        thumbnail_rgba: thumb_res,
+                    });
+                    return;
+                }
+            }
+
+            // 2. Still image check
+            if is_image_file(&path) {
+                match image::open(&path) {
+                    Ok(img) => {
+                        let w = img.width() as usize;
+                        let h = img.height() as usize;
+                        let rgba = img.to_rgba8().into_raw();
+                        let _ = tx.send(MediaLoadResult::StillImage {
+                            path,
+                            width: w,
+                            height: h,
+                            rgba,
+                        });
+                        return;
+                    }
+                    Err(e) => {
+                        let _ = tx.send(MediaLoadResult::Failed {
+                            path,
+                            error: format!("Failed to decode image: {}", e),
+                        });
+                        return;
+                    }
+                }
+            }
+
+            // 3. QuickTime HAP MOV check
+            match QtHapReader::open(&path) {
+                Ok(mut reader) => {
+                    let file_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                    let summary = extract_stream_summary(&mut reader, file_size).ok();
+                    let (first_rgba, decode_ms, pkt_bytes) = if let Ok(pkt) = reader.read_frame_packet(0) {
+                        let p_len = pkt.len();
+                        let t0 = Instant::now();
+                        let rgba = decode_frame_to_rgba(&pkt, reader.width() as usize, reader.height() as usize).ok();
+                        let ms = t0.elapsed().as_secs_f32() * 1000.0;
+                        (rgba, ms, p_len)
+                    } else {
+                        (None, 0.0, 0)
+                    };
+
+                    let _ = tx.send(MediaLoadResult::HapVideo {
+                        path,
+                        reader,
+                        summary,
+                        first_frame_rgba: first_rgba,
+                        first_frame_decode_ms: decode_ms,
+                        first_packet_bytes: pkt_bytes,
+                    });
+                    return;
+                }
+                Err(hap_err) => {
+                    // Check if it is a video container
+                    if is_video_container(&path) {
+                        match probe_video_input(&path) {
+                            Ok(probe) => {
+                                let _ = tx.send(MediaLoadResult::GenericVideo {
+                                    path,
+                                    probe,
+                                });
+                                return;
+                            }
+                            Err(probe_err) => {
+                                let _ = tx.send(MediaLoadResult::Failed {
+                                    path,
+                                    error: format!("Unable to parse video stream ({}). Probe note: {}", hap_err, probe_err),
+                                });
+                                return;
+                            }
+                        }
+                    }
+
+                    // Fallback: attempt image decode in case extension was missing
+                    if let Ok(img) = image::open(&path) {
+                        let w = img.width() as usize;
+                        let h = img.height() as usize;
+                        let rgba = img.to_rgba8().into_raw();
+                        let _ = tx.send(MediaLoadResult::StillImage {
+                            path,
+                            width: w,
+                            height: h,
+                            rgba,
+                        });
+                        return;
+                    }
+
+                    let _ = tx.send(MediaLoadResult::Failed {
+                        path,
+                        error: format!("Unrecognized file format: {}", hap_err),
+                    });
+                }
+            }
+        })
+        .ok();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,6 +795,80 @@ mod tests {
         assert!(is_video_container(std::path::Path::new("broadcast.mxf")));
         assert!(!is_video_container(std::path::Path::new("frame_0001.png")));
         assert!(!is_video_container(std::path::Path::new("still.jpg")));
+    }
+
+    #[test]
+    fn test_image_extensions() {
+        assert!(is_image_file(std::path::Path::new("test.png")));
+        assert!(is_image_file(std::path::Path::new("photo.jpg")));
+        assert!(is_image_file(std::path::Path::new("picture.jpeg")));
+        assert!(is_image_file(std::path::Path::new("scan.tiff")));
+        assert!(is_image_file(std::path::Path::new("graphic.webp")));
+        assert!(is_image_file(std::path::Path::new("icon.bmp")));
+        assert!(!is_image_file(std::path::Path::new("movie.mov")));
+        assert!(!is_image_file(std::path::Path::new("video.mp4")));
+    }
+
+    #[test]
+    fn test_pad_rgba_to_multiple_of_4() {
+        let raw = vec![255u8; 6 * 5 * 4];
+        let (pw, ph, padded) = pad_rgba_to_multiple_of_4(&raw, 6, 5);
+        assert_eq!(pw, 8);
+        assert_eq!(ph, 8);
+        assert_eq!(padded.len(), 8 * 8 * 4);
+
+        let aligned = vec![128u8; 8 * 8 * 4];
+        let (aw, ah, aligned_res) = pad_rgba_to_multiple_of_4(&aligned, 8, 8);
+        assert_eq!(aw, 8);
+        assert_eq!(ah, 8);
+        assert_eq!(aligned_res.len(), 8 * 8 * 4);
+    }
+
+    #[test]
+    fn test_export_still_image_and_hap_mov() {
+        let temp_dir = std::env::temp_dir().join("haplab_test_img_export");
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let w = 8;
+        let h = 8;
+        let mut rgba = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for x in 0..w {
+                rgba.push((x * 30) as u8);
+                rgba.push((y * 30) as u8);
+                rgba.push(180);
+                rgba.push(255);
+            }
+        }
+
+        // Export to PNG
+        let png_path = temp_dir.join("test_out.png");
+        assert!(export_image_to_file(&rgba, w, h, &png_path).is_ok());
+        assert!(png_path.exists());
+
+        // Export to JPEG
+        let jpg_path = temp_dir.join("test_out.jpg");
+        assert!(export_image_to_file(&rgba, w, h, &jpg_path).is_ok());
+        assert!(jpg_path.exists());
+
+        // Export to HAP MOV
+        let mov_path = temp_dir.join("test_out.mov");
+        assert!(export_image_to_hap_mov(&rgba, w, h, &mov_path, HapFormat::HapY, true).is_ok());
+        assert!(mov_path.exists());
+
+        // Verify QtHapReader can open the generated single-frame HAP MOV
+        let mut reader = QtHapReader::open(&mov_path).expect("Should open generated MOV");
+        assert_eq!(reader.frame_count(), 1);
+        assert_eq!(reader.width(), 8);
+        assert_eq!(reader.height(), 8);
+        let pkt = reader.read_frame_packet(0).expect("Should read packet 0");
+        let decoded = decode_frame_to_rgba(&pkt, 8, 8).expect("Should decode packet");
+        assert_eq!(decoded.len(), 8 * 8 * 4);
+
+        let _ = fs::remove_file(png_path);
+        let _ = fs::remove_file(jpg_path);
+        let _ = fs::remove_file(mov_path);
+        let _ = fs::remove_dir(temp_dir);
     }
 }
 
