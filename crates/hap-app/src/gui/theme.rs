@@ -38,26 +38,32 @@ pub fn apply_studio_theme(ctx: &egui::Context) {
     visuals.code_bg_color = Color32::from_rgb(18, 22, 30);
 
     visuals.widgets.noninteractive.bg_fill = colors::BG_CARD;
-    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, colors::BORDER_SUBTLE);
+    visuals.widgets.noninteractive.bg_stroke = Stroke::NONE;
     visuals.widgets.noninteractive.corner_radius = CornerRadius::same(6);
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, colors::TEXT_PRIMARY);
 
     visuals.widgets.inactive.bg_fill = Color32::from_rgb(28, 34, 46);
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, colors::BORDER_SUBTLE);
+    visuals.widgets.inactive.bg_stroke = Stroke::NONE;
     visuals.widgets.inactive.corner_radius = CornerRadius::same(6);
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, colors::TEXT_PRIMARY);
 
     visuals.widgets.hovered.bg_fill = colors::BG_CARD_HOVER;
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, colors::BORDER_ACTIVE);
+    visuals.widgets.hovered.bg_stroke = Stroke::NONE;
     visuals.widgets.hovered.corner_radius = CornerRadius::same(6);
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::WHITE);
 
     visuals.widgets.active.bg_fill = colors::ACCENT_BLUE;
-    visuals.widgets.active.bg_stroke = Stroke::new(1.0, colors::BORDER_ACTIVE);
+    visuals.widgets.active.bg_stroke = Stroke::NONE;
     visuals.widgets.active.corner_radius = CornerRadius::same(6);
     visuals.widgets.active.fg_stroke = Stroke::new(1.0, Color32::WHITE);
 
+    visuals.widgets.open.bg_fill = colors::BG_CARD_HOVER;
+    visuals.widgets.open.bg_stroke = Stroke::NONE;
+    visuals.widgets.open.corner_radius = CornerRadius::same(6);
+
     visuals.selection.bg_fill = colors::ACCENT_BLUE;
+    visuals.selection.stroke = Stroke::NONE;
+    visuals.window_stroke = Stroke::NONE;
     visuals.window_corner_radius = CornerRadius::same(8);
 
     ctx.set_visuals(visuals);

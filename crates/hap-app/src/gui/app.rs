@@ -1120,12 +1120,12 @@ impl eframe::App for HapLabApp {
         let menu_frame = if has_media {
             egui::Frame::new()
                 .fill(Color32::from_rgba_premultiplied(18, 22, 32, 225))
-                .stroke(Stroke::new(1.0, Color32::from_rgba_premultiplied(80, 100, 140, 45)))
+                .stroke(Stroke::NONE)
                 .inner_margin(egui::Margin::symmetric(14, 6))
         } else {
             egui::Frame::new()
                 .fill(Color32::from_rgba_premultiplied(12, 15, 22, 150))
-                .stroke(Stroke::new(1.0, Color32::from_rgba_premultiplied(80, 100, 140, 35)))
+                .stroke(Stroke::NONE)
                 .inner_margin(egui::Margin::symmetric(14, 7))
         };
 
@@ -1401,12 +1401,12 @@ impl eframe::App for HapLabApp {
         let transport_frame = if has_media {
             egui::Frame::new()
                 .fill(Color32::from_rgba_premultiplied(16, 20, 30, 215)) // Frosted translucent dark glass
-                .stroke(Stroke::new(1.0, Color32::from_rgba_premultiplied(100, 130, 190, 55)))
+                .stroke(Stroke::NONE)
                 .inner_margin(egui::Margin::symmetric(18, 8))
         } else {
             egui::Frame::new()
                 .fill(Color32::from_rgba_premultiplied(14, 18, 26, 175)) // Translucent glass showing ambient glow
-                .stroke(Stroke::new(1.0, Color32::from_rgba_premultiplied(100, 130, 190, 45)))
+                .stroke(Stroke::NONE)
                 .inner_margin(egui::Margin::symmetric(18, 8))
         };
 
@@ -1820,9 +1820,6 @@ impl eframe::App for HapLabApp {
                             );
                         }
 
-                        // Canvas border
-                        ui.painter().rect_stroke(rect, 0, Stroke::new(1.0, colors::BORDER_SUBTLE), egui::StrokeKind::Inside);
-
                         // Floating Stream Telemetry HUD (Top-Left of canvas)
                         if self.show_hud_overlay && self.reader.is_some() {
                             let hud_rect = Rect::from_min_size(
@@ -1833,12 +1830,6 @@ impl eframe::App for HapLabApp {
                                 hud_rect,
                                 CornerRadius::same(6),
                                 Color32::from_rgba_premultiplied(16, 20, 28, 220),
-                            );
-                            ui.painter().rect_stroke(
-                                hud_rect,
-                                CornerRadius::same(6),
-                                Stroke::new(1.0, colors::BORDER_SUBTLE),
-                                egui::StrokeKind::Inside,
                             );
 
                             let mut hud_ui = ui.new_child(
@@ -1893,12 +1884,6 @@ impl eframe::App for HapLabApp {
                         CornerRadius::same(10),
                         Color32::from_rgba_premultiplied(18, 22, 32, 230),
                     );
-                    ui.painter().rect_stroke(
-                        loading_rect,
-                        CornerRadius::same(10),
-                        Stroke::new(1.0, Color32::from_rgba_premultiplied(90, 110, 160, 140)),
-                        egui::StrokeKind::Inside,
-                    );
                     let mut loading_ui = ui.new_child(
                         egui::UiBuilder::new()
                             .max_rect(loading_rect.shrink(10.0))
@@ -1943,9 +1928,9 @@ impl HapLabApp {
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     // Source Media Card
-                    let input_frame = egui::Frame::canvas(ui.style())
+                    let input_frame = egui::Frame::new()
                         .fill(colors::BG_CARD)
-                        .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
+                        .stroke(Stroke::NONE)
                         .corner_radius(CornerRadius::same(6))
                         .inner_margin(egui::Margin::same(14));
 
@@ -1979,7 +1964,6 @@ impl HapLabApp {
                                     let (rect, _) = ui.allocate_exact_size(Vec2::new(72.0, 72.0), egui::Sense::hover());
                                     paint_transparency_checkerboard(ui.painter(), rect);
                                     ui.painter().image(thumb.id(), rect, Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
-                                    ui.painter().rect_stroke(rect, 0, Stroke::new(1.0, colors::BORDER_SUBTLE), egui::StrokeKind::Inside);
                                 }
                                 ui.vertical(|ui| {
                                     ui.monospace(format!("Path: {}", path.display()));
@@ -2014,12 +1998,11 @@ impl HapLabApp {
                         ];
                         for preset in presets {
                             let is_sel = self.enc_preset == preset;
-                            let bg = if is_sel { colors::BG_CARD_HOVER } else { colors::BG_ELEVATED };
-                            let stroke = if is_sel { Stroke::new(1.5, colors::ACCENT_CYAN) } else { Stroke::new(1.0, colors::BORDER_SUBTLE) };
+                            let bg = if is_sel { colors::ACCENT_BLUE } else { colors::BG_ELEVATED };
                             let btn = egui::Button::new(RichText::new(preset.name()).size(13.0).color(if is_sel { Color32::WHITE } else { colors::TEXT_MUTED }).strong())
                                 .min_size(Vec2::new(100.0, 32.0))
                                 .fill(bg)
-                                .stroke(stroke)
+                                .stroke(Stroke::NONE)
                                 .corner_radius(CornerRadius::same(5));
                             if ui.add(btn).clicked() {
                                 self.apply_preset(preset);
@@ -2462,9 +2445,9 @@ impl HapLabApp {
 
                     ui.add_space(6.0);
 
-                    let log_frame = egui::Frame::canvas(ui.style())
+                    let log_frame = egui::Frame::new()
                         .fill(Color32::from_rgb(10, 12, 16))
-                        .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
+                        .stroke(Stroke::NONE)
                         .corner_radius(CornerRadius::same(6))
                         .inner_margin(egui::Margin::same(10));
 
