@@ -4,7 +4,7 @@
 
 use super::theme::{
     apply_studio_theme, colors, format_bytes, format_smpte_timecode,
-    paint_transparency_checkerboard, render_badge, reveal_in_file_manager,
+    paint_ambient_glow, paint_transparency_checkerboard, render_badge, reveal_in_file_manager,
 };
 use crate::benchmark::{spawn_benchmark_worker, BenchmarkProgress, BenchmarkScore};
 use crate::platform::{open_windows_default_apps, register_mov_association};
@@ -157,6 +157,11 @@ pub struct HapLabApp {
     system_logs: Vec<String>,
     log_search: String,
     app_icon_texture: Option<egui::TextureHandle>,
+
+    // --- Ambient Glow & Interaction State ---
+    ambient_start: Instant,
+    show_ambient_glow: bool,
+    is_drag_hovered: bool,
 }
 
 impl Default for HapLabApp {
@@ -256,6 +261,10 @@ impl Default for HapLabApp {
             system_logs: Vec::new(),
             log_search: String::new(),
             app_icon_texture: None,
+
+            ambient_start: Instant::now(),
+            show_ambient_glow: true,
+            is_drag_hovered: false,
         };
 
         app.log("HapLab initialized in player-first studio layout.");
@@ -648,6 +657,7 @@ impl eframe::App for HapLabApp {
 
         // 1. Drag & Drop File Handling
         ctx.input(|i| {
+            self.is_drag_hovered = !i.raw.hovered_files.is_empty();
             if !i.raw.dropped_files.is_empty() {
                 for file in &i.raw.dropped_files {
                     if let Some(ref path) = file.path {
@@ -901,6 +911,12 @@ impl eframe::App for HapLabApp {
             }
             ctx.request_repaint();
         }
+
+        // 5. Ambient Glow 60 FPS Repaint Tick
+        // Only request continuous 60 FPS repaints when idle (no media loaded, not playing) and ambient glow is enabled.
+        if !self.is_playing && self.reader.is_none() && self.show_ambient_glow {
+            ctx.request_repaint_after_secs(1.0 / 60.0);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1102,6 +1118,9 @@ impl eframe::App for HapLabApp {
                         self.show_hud_overlay = !self.show_hud_overlay;
                         ui.close();
                     }
+
+                    ui.separator();
+                    ui.checkbox(&mut self.show_ambient_glow, "Ambient Light Glow");
                 });
 
                 // --- MENU: TOOLS ---
@@ -1314,74 +1333,97 @@ impl eframe::App for HapLabApp {
                     }
                 });
             } else {
-                // --- WELCOME / EMPTY DROP ZONE ---
-                ui.vertical_centered(|ui| {
-                    ui.add_space(ui.available_height() * 0.12);
+                // --- MINIMALIST AMBIENT GLOW & DROP TARGET ---
+                let available_size = ui.available_size();
+                let (canvas_rect, _resp) = ui.allocate_exact_size(available_size, egui::Sense::hover());
 
-                    if let Some(ref icon) = self.app_icon_texture {
-                        let (rect, _response) = ui.allocate_exact_size(Vec2::new(56.0, 56.0), egui::Sense::hover());
-                        ui.painter().image(
-                            icon.id(),
-                            rect,
-                            Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                            Color32::WHITE,
-                        );
-                        ui.add_space(10.0);
+                if self.show_ambient_glow {
+                    let time = self.ambient_start.elapsed().as_secs_f32();
+                    paint_ambient_glow(ui.painter(), canvas_rect, time, self.is_drag_hovered);
+                }
+
+                // Centered frosted-glass drop card
+                let card_w = 460.0f32.min(available_size.x - 40.0).max(280.0);
+                let card_h = 230.0f32.min(available_size.y - 40.0).max(180.0);
+                let card_rect = Rect::from_center_size(canvas_rect.center(), Vec2::new(card_w, card_h));
+
+                // Frosted glass background & responsive stroke
+                let bg_fill = if self.is_drag_hovered {
+                    Color32::from_rgba_premultiplied(32, 24, 48, 225)
+                } else {
+                    Color32::from_rgba_premultiplied(16, 18, 26, 190)
+                };
+                let stroke_color = if self.is_drag_hovered {
+                    Color32::from_rgb(180, 90, 255)
+                } else {
+                    Color32::from_rgba_premultiplied(255, 255, 255, 28)
+                };
+
+                ui.painter().rect_filled(card_rect, CornerRadius::same(16), bg_fill);
+                ui.painter().rect_stroke(
+                    card_rect,
+                    CornerRadius::same(16),
+                    Stroke::new(if self.is_drag_hovered { 2.0 } else { 1.0 }, stroke_color),
+                    egui::StrokeKind::Inside,
+                );
+
+                let mut card_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(card_rect.shrink(18.0))
+                        .layout(egui::Layout::top_down(egui::Align::Center)),
+                );
+
+                card_ui.add_space(4.0);
+
+                if let Some(ref icon) = self.app_icon_texture {
+                    let (icon_rect, _) = card_ui.allocate_exact_size(Vec2::new(44.0, 44.0), egui::Sense::hover());
+                    card_ui.painter().image(
+                        icon.id(),
+                        icon_rect,
+                        Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        if self.is_drag_hovered {
+                            Color32::WHITE
+                        } else {
+                            Color32::from_rgba_premultiplied(225, 230, 255, 210)
+                        },
+                    );
+                    card_ui.add_space(10.0);
+                }
+
+                let title_text = if self.is_drag_hovered {
+                    "Release to Open Media"
+                } else {
+                    "Drop media file here"
+                };
+                card_ui.label(RichText::new(title_text).size(17.0).color(Color32::WHITE).strong());
+                card_ui.add_space(4.0);
+                card_ui.label(
+                    RichText::new("QuickTime HAP | MP4 | HEVC | AV1 | ProRes | Image Sequences")
+                        .size(11.5)
+                        .color(colors::TEXT_MUTED),
+                );
+
+                card_ui.add_space(18.0);
+
+                card_ui.horizontal(|ui| {
+                    if ui.add(egui::Button::new(RichText::new("Browse File... (Ctrl+O)").size(12.5)).min_size(Vec2::new(140.0, 30.0))).clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("All Media", &["mov", "mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts", "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
+                            .add_filter("QuickTime HAP Videos (*.mov)", &["mov"])
+                            .add_filter("Video Files (*.mp4, *.mkv, *.webm, *.mxf, *.avi)", &["mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts"])
+                            .pick_file()
+                        {
+                            self.open_media_file(path, &ctx);
+                        }
                     }
 
-                    ui.heading(RichText::new("HapLab Video Studio").size(24.0).color(Color32::WHITE).strong());
-                    ui.add_space(6.0);
-                    ui.label(RichText::new("High-performance pure Rust HAP video playback, GPU texture streaming, and transcode pipeline.").color(colors::TEXT_MUTED).size(14.0));
-                    ui.add_space(20.0);
+                    ui.add_space(8.0);
 
-                    // Large Drop Target Card
-                    let drop_frame = egui::Frame::canvas(ui.style())
-                        .fill(colors::BG_CARD)
-                        .stroke(Stroke::new(1.5, colors::BORDER_ACTIVE))
-                        .corner_radius(CornerRadius::same(10))
-                        .inner_margin(egui::Margin::symmetric(48, 28));
-
-                    drop_frame.show(ui, |ui| {
-                        ui.vertical_centered(|ui| {
-                            ui.label(RichText::new("Drop any video file or image sequence folder here").size(16.0).color(Color32::WHITE).strong());
-                            ui.add_space(4.0);
-                            ui.label(RichText::new("HAP (.mov), H.264 / HEVC / AV1 / ProRes (.mp4, .mkv, .webm), or PNG/TIFF frames").color(colors::TEXT_MUTED).size(12.5));
-                            ui.add_space(18.0);
-
-                            ui.horizontal(|ui| {
-                                if ui.add(egui::Button::new(RichText::new("Open Media File... (Ctrl+O)").size(13.5)).min_size(Vec2::new(170.0, 36.0))).clicked() {
-                                    if let Some(path) = rfd::FileDialog::new()
-                                        .add_filter("All Media", &["mov", "mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts", "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
-                                        .add_filter("QuickTime HAP Videos (*.mov)", &["mov"])
-                                        .add_filter("Video Files (*.mp4, *.mkv, *.webm, *.mxf, *.avi)", &["mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts"])
-                                        .pick_file()
-                                    {
-                                        self.open_media_file(path, &ctx);
-                                    }
-                                }
-
-                                if ui.add(egui::Button::new(RichText::new("Open Image Folder... (Ctrl+Shift+O)").size(13.5)).min_size(Vec2::new(210.0, 36.0))).clicked() {
-                                    if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                                        self.open_media_file(folder, &ctx);
-                                    }
-                                }
-
-                                if ui.add(egui::Button::new(RichText::new("Hardware Benchmark (Ctrl+B)").size(13.5)).min_size(Vec2::new(190.0, 36.0))).clicked() {
-                                    self.show_benchmark_window = true;
-                                }
-                            });
-                        });
-                    });
-
-                    ui.add_space(20.0);
-
-                    // Supported formats badges row
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("Supported Formats:").color(colors::TEXT_FAINT).size(12.0));
-                        for fmt in &["Hap Q (HapY)", "Hap R (BC7)", "Hap Q Alpha (HapM)", "Hap 1 (DXT1)", "Hap Alpha (DXT5)", "Hap HDR (BC6H)", "H.264 / AVC", "H.265 / HEVC", "AV1", "Apple ProRes"] {
-                            render_badge(ui, fmt, colors::BG_ELEVATED, colors::TEXT_MUTED);
+                    if ui.add(egui::Button::new(RichText::new("Open Folder...").size(12.5)).min_size(Vec2::new(110.0, 30.0))).clicked() {
+                        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                            self.open_media_file(folder, &ctx);
                         }
-                    });
+                    }
                 });
             }
         });
@@ -1596,7 +1638,7 @@ impl eframe::App for HapLabApp {
             } else {
                 // Empty state bottom status
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Drop any HAP MOV, MP4, HEVC, AV1, ProRes file, or image sequence folder to begin.").color(colors::TEXT_FAINT));
+                    ui.label(RichText::new("Ready").color(colors::TEXT_FAINT).size(12.0));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(RichText::new("Space: Play | Left/Right: Step | Ctrl+O: Open | Ctrl+E: Transcode | F1: Shortcuts").color(colors::TEXT_FAINT).size(11.0));
                     });

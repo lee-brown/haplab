@@ -1,6 +1,6 @@
 //! Professional dark studio theme, palette, and layout helpers for HapLab.
 
-use eframe::egui::{self, Color32, CornerRadius, Painter, Rect, Stroke, Vec2};
+use eframe::egui::{self, Color32, CornerRadius, Painter, Pos2, Rect, Stroke, Vec2};
 use std::path::Path;
 
 #[allow(dead_code)]
@@ -164,4 +164,74 @@ pub fn reveal_in_file_manager(path: &Path) {
             .arg(target)
             .spawn();
     }
+}
+
+/// Paints a sophisticated, organic Apple-style ambient light glow effect with white and purple flares.
+/// Uses GPU-interpolated radial gradient mesh fans for 60 FPS rendering with near-zero CPU cost.
+pub fn paint_ambient_glow(painter: &Painter, rect: Rect, time: f32, is_hovered: bool) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+
+    // Helper to draw a soft luminous radial gradient flare mesh
+    let draw_flare = |center: Pos2, radius: f32, color: Color32| {
+        let segments = 36;
+        let mut mesh = egui::Mesh::default();
+        mesh.vertices.reserve(segments + 1);
+        mesh.indices.reserve(segments * 3);
+
+        let center_idx = mesh.vertices.len() as u32;
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: center,
+            uv: Pos2::ZERO,
+            color,
+        });
+
+        for i in 0..segments {
+            let angle = (i as f32 / segments as f32) * std::f32::consts::TAU;
+            let p = center + Vec2::new(angle.cos() * radius, angle.sin() * radius);
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: p,
+                uv: Pos2::ZERO,
+                color: Color32::TRANSPARENT,
+            });
+
+            let next_i = (i + 1) % segments;
+            mesh.indices.push(center_idx);
+            mesh.indices.push(center_idx + 1 + i as u32);
+            mesh.indices.push(center_idx + 1 + next_i as u32);
+        }
+
+        painter.add(egui::Shape::mesh(mesh));
+    };
+
+    let hover_scale: f32 = if is_hovered { 1.3 } else { 1.0 };
+    let hover_alpha_mult: f32 = if is_hovered { 1.5 } else { 1.0 };
+
+    // 1. Deep Royal Purple / Electric Violet Glow
+    let p1_x = cx + (time * 0.45).sin() * 75.0;
+    let p1_y = cy + (time * 0.35).cos() * 38.0;
+    let r1 = (380.0 + (time * 0.8).sin() * 35.0) * hover_scale;
+    let a1 = ((42.0 * hover_alpha_mult).min(85.0)) as u8;
+    draw_flare(Pos2::new(p1_x, p1_y), r1, Color32::from_rgba_premultiplied(140, 50, 235, a1));
+
+    // 2. Secondary Warm Orchid / Vivid Magenta Flare
+    let p2_x = cx - (time * 0.38).cos() * 85.0;
+    let p2_y = cy - (time * 0.52).sin() * 45.0;
+    let r2 = (320.0 + (time * 0.65).cos() * 28.0) * hover_scale;
+    let a2 = ((35.0 * hover_alpha_mult).min(70.0)) as u8;
+    draw_flare(Pos2::new(p2_x, p2_y), r2, Color32::from_rgba_premultiplied(185, 65, 215, a2));
+
+    // 3. Apple-style Ethereal Moon-White Light Flare (Subtle Core)
+    let p3_x = cx + (time * 0.6).cos() * 32.0;
+    let p3_y = cy + (time * 0.7).sin() * 22.0;
+    let r3 = (210.0 + (time * 1.1).sin() * 20.0) * hover_scale;
+    let a3 = ((38.0 * hover_alpha_mult).min(75.0)) as u8;
+    draw_flare(Pos2::new(p3_x, p3_y), r3, Color32::from_rgba_premultiplied(235, 240, 255, a3));
+
+    // 4. Soft Indigo / Deep Azure Ambient Halo
+    let p4_x = cx + (time * 0.25).sin() * 100.0;
+    let p4_y = cy - (time * 0.3).cos() * 42.0;
+    let r4 = 440.0 * hover_scale;
+    let a4 = ((22.0 * hover_alpha_mult).min(45.0)) as u8;
+    draw_flare(Pos2::new(p4_x, p4_y), r4, Color32::from_rgba_premultiplied(85, 55, 210, a4));
 }
