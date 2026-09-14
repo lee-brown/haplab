@@ -1,5 +1,6 @@
 # hap-rs / HapLab
 
+[![CI](https://github.com/lee-brown/haplab/actions/workflows/ci.yml/badge.svg)](https://github.com/lee-brown/haplab/actions/workflows/ci.yml)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm_Noncommercial_1.0.0-crimson.svg)](https://polyformproject.org/licenses/noncommercial/1.0.0)
 [![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 
@@ -46,6 +47,15 @@ Built for real-time video playback, media servers, transcode pipelines, and inte
 ## Performance Benchmarks: HapLab vs FFmpeg
 
 Real benchmarks measured side by side on Windows 11 x86_64, decoding identical QuickTime HAP video streams. FFmpeg was tested using `ffmpeg -benchmark -i <video.mov> -f null -` against FFmpeg 8.1.2 (`libavcodec`). HapLab was evaluated across both its pure Rust software CPU rasterizer and its zero-copy Direct GPU VRAM texture streaming pipeline.
+
+> [!NOTE]
+> **Hardware & Environment Tested**:
+> - **CPU**: 13th Gen Intel Core i7-1360P (12 Cores, 16 Threads, up to 5.0 GHz)
+> - **GPU**: Intel Iris Xe Graphics
+> - **RAM & Storage**: 16 GB DDR5, NVMe PCIe 4.0 SSD
+> - **OS**: Windows 11 Home 64-bit
+> - **FFmpeg Version**: FFmpeg 8.1.2-essentials (libavcodec 62.28.102)
+> - **HapLab Version**: v0.1.0 release build (100% pure Rust, SIMD + Rayon)
 
 ![Real-Time Video Throughput: HapLab vs FFmpeg](assets/benchmark_comparison.png)
 
