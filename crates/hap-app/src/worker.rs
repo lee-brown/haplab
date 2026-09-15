@@ -462,6 +462,7 @@ impl GenericVideoPlayer {
                     "-nostdin", "-an", "-sn", "-v", "error",
                     "-hwaccel", "auto",
                     "-threads", "0",
+                    "-sws_flags", "fast_bilinear",
                 ]);
                 if start_sec > 0.04 {
                     cmd.args(&["-ss", &format!("{:.3}", start_sec)]);
@@ -482,7 +483,7 @@ impl GenericVideoPlayer {
                     Err(_) => return,
                 };
 
-                let mut stdout = match child.stdout.take() {
+                let stdout = match child.stdout.take() {
                     Some(s) => s,
                     None => {
                         let _ = child.kill();
@@ -494,6 +495,8 @@ impl GenericVideoPlayer {
                     *lock = Some(child);
                 }
 
+                use std::io::{BufReader, Read};
+                let mut reader = BufReader::with_capacity(2 * 1024 * 1024, stdout);
                 let frame_size = pw * ph * 4;
                 let mut current_idx = start_frame;
 
@@ -503,8 +506,7 @@ impl GenericVideoPlayer {
                     }
 
                     let mut buf = vec![0u8; frame_size];
-                    use std::io::Read;
-                    match stdout.read_exact(&mut buf) {
+                    match reader.read_exact(&mut buf) {
                         Ok(()) => {
                             if tx.send((current_idx, buf)).is_err() {
                                 break;

@@ -678,8 +678,8 @@ impl HapLabApp {
                 let decode_start = Instant::now();
                 if let Ok(mut rgba) = decode_frame_to_rgba(&packet, width, height) {
                     self.last_decode_ms = decode_start.elapsed().as_secs_f32() * 1000.0;
-                    self.raw_frame_cache = Some(rgba.clone());
                     self.rebuild_texture_from_cache(ctx, width, height, &mut rgba);
+                    self.raw_frame_cache = Some(rgba);
                 }
             }
         }
@@ -710,7 +710,7 @@ impl HapLabApp {
             }
         }
 
-        let color_img = egui::ColorImage::from_rgba_unmultiplied([width, height], rgba);
+        let color_img = egui::ColorImage::from_rgba_premultiplied([width, height], rgba);
         if let Some(ref mut tex) = self.preview_texture {
             if tex.size() == [width, height] {
                 tex.set(color_img, TextureOptions::LINEAR);
@@ -1030,9 +1030,11 @@ impl eframe::App for HapLabApp {
 
                 // Drain frames up to target_frame from player channel so we never lag behind wall clock
                 let mut latest_frame: Option<(usize, Vec<u8>)> = None;
+                let mut frames_drained = 0usize;
                 loop {
                     match player.try_recv_frame() {
                         Ok((frame_idx, rgba)) => {
+                            frames_drained += 1;
                             if frame_idx <= target_frame {
                                 latest_frame = Some((frame_idx, rgba));
                             } else {
@@ -1060,10 +1062,10 @@ impl eframe::App for HapLabApp {
                     self.current_frame = frame_idx;
                     let w = player.play_width;
                     let h = player.play_height;
-                    self.raw_frame_cache = Some(rgba.clone());
                     self.rebuild_texture_from_cache(ctx, w, h, &mut rgba);
+                    self.raw_frame_cache = Some(rgba);
 
-                    self.playback_frames_count += 1;
+                    self.playback_frames_count += frames_drained.max(1);
                     let elapsed = self.playback_timer.elapsed().as_secs_f32();
                     if elapsed >= 0.5 {
                         self.playback_fps = (self.playback_frames_count as f32) / elapsed;
