@@ -386,6 +386,7 @@ pub struct GenericVideoPlayer {
     pub duration_secs: f32,
     pub codec: String,
 
+    stashed_frame: Option<(usize, Vec<u8>)>,
     frame_rx: Option<Receiver<(usize, Vec<u8>)>>,
     cancel_flag: Option<Arc<AtomicBool>>,
     child_handle: Option<Arc<Mutex<Option<std::process::Child>>>>,
@@ -396,11 +397,11 @@ impl GenericVideoPlayer {
         let original_width = probe.width;
         let original_height = probe.height;
 
-        // For preview texture, if dimensions exceed 1920x1080, scale down to 1080p
-        // to maintain 60+ FPS decode throughput and low GPU texture upload overhead.
-        let (play_width, play_height) = if original_width > 1920 || original_height > 1080 {
+        // For display preview texture of generic non-HAP files, scale down to 720p max
+        // to maintain 30-60 FPS pipe throughput with low GPU memory upload overhead.
+        let (play_width, play_height) = if original_width > 1280 || original_height > 720 {
             let aspect = original_width as f32 / original_height.max(1) as f32;
-            let w = 1920.min(original_width);
+            let w = 1280.min(original_width);
             let h = ((w as f32 / aspect).round() as usize) & !1;
             (w, h.max(2))
         } else {
@@ -417,6 +418,7 @@ impl GenericVideoPlayer {
             total_frames: probe.frame_count,
             duration_secs: probe.duration_secs,
             codec: probe.codec.clone(),
+            stashed_frame: None,
             frame_rx: None,
             cancel_flag: None,
             child_handle: None,
@@ -425,6 +427,7 @@ impl GenericVideoPlayer {
 
     pub fn start_playback(&mut self, start_frame: usize) {
         self.stop_playback();
+        self.stashed_frame = None;
 
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel_flag = Some(cancel.clone());
@@ -470,7 +473,7 @@ impl GenericVideoPlayer {
                 cmd.arg("-i").arg(&path);
 
                 if pw != orig_w || ph != orig_h {
-                    cmd.args(&["-vf", &format!("scale={}:{}", pw, ph)]);
+                    cmd.args(&["-vf", &format!("scale={}:{}:flags=fast_bilinear", pw, ph)]);
                 }
 
                 cmd.args(&["-f", "rawvideo", "-pix_fmt", "rgba", "-"]);
@@ -545,14 +548,22 @@ impl GenericVideoPlayer {
         self.frame_rx = None;
         self.cancel_flag = None;
         self.child_handle = None;
+        self.stashed_frame = None;
     }
 
-    pub fn try_recv_frame(&self) -> Result<(usize, Vec<u8>), crossbeam_channel::TryRecvError> {
+    pub fn try_recv_frame(&mut self) -> Result<(usize, Vec<u8>), crossbeam_channel::TryRecvError> {
+        if let Some(frame) = self.stashed_frame.take() {
+            return Ok(frame);
+        }
         if let Some(ref rx) = self.frame_rx {
             rx.try_recv()
         } else {
             Err(crossbeam_channel::TryRecvError::Disconnected)
         }
+    }
+
+    pub fn unrecv_frame(&mut self, frame: (usize, Vec<u8>)) {
+        self.stashed_frame = Some(frame);
     }
 
     #[allow(dead_code)]

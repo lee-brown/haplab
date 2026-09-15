@@ -1034,11 +1034,11 @@ impl eframe::App for HapLabApp {
                 loop {
                     match player.try_recv_frame() {
                         Ok((frame_idx, rgba)) => {
-                            frames_drained += 1;
                             if frame_idx <= target_frame {
+                                frames_drained += 1;
                                 latest_frame = Some((frame_idx, rgba));
                             } else {
-                                latest_frame = Some((frame_idx, rgba));
+                                player.unrecv_frame((frame_idx, rgba));
                                 break;
                             }
                         }
