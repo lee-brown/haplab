@@ -101,6 +101,11 @@ pub struct HapLabApp {
     reader: Option<QtHapReader>,
     generic_player: Option<GenericVideoPlayer>,
     seek_rx: Option<Receiver<(usize, Vec<u8>)>>,
+    pending_seek_frame: Option<usize>,
+    was_playing_before_scrub: bool,
+    is_fullscreen: bool,
+    playback_start_instant: Instant,
+    playback_start_frame: usize,
     current_frame: usize,
     is_playing: bool,
     loop_playback: bool,
@@ -218,6 +223,11 @@ impl Default for HapLabApp {
             reader: None,
             generic_player: None,
             seek_rx: None,
+            pending_seek_frame: None,
+            was_playing_before_scrub: false,
+            is_fullscreen: false,
+            playback_start_instant: Instant::now(),
+            playback_start_frame: 0,
             current_frame: 0,
             is_playing: false,
             loop_playback: true,
@@ -418,6 +428,8 @@ impl HapLabApp {
         }
         self.generic_player = None;
         self.seek_rx = None;
+        self.pending_seek_frame = None;
+        self.was_playing_before_scrub = false;
         self.reader = None;
         self.mov_path = None;
         self.raw_frame_cache = None;
@@ -436,6 +448,11 @@ impl HapLabApp {
         self.current_frame = 0;
         self.is_playing = false;
         self.notify("Media closed", colors::TEXT_MUTED);
+    }
+
+    pub fn toggle_fullscreen(&mut self, ctx: &egui::Context) {
+        self.is_fullscreen = !self.is_fullscreen;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
     }
 
     /// Asynchronously opens a media file or directory without freezing the UI thread.
@@ -554,6 +571,8 @@ impl HapLabApp {
                     self.current_frame = 0;
                 }
                 self.is_playing = true;
+                self.playback_start_instant = Instant::now();
+                self.playback_start_frame = self.current_frame;
                 self.last_frame_time = Instant::now();
                 self.playback_timer = Instant::now();
                 self.playback_frames_count = 0;
@@ -575,7 +594,12 @@ impl HapLabApp {
         if let Some(ref mut player) = self.generic_player {
             if self.is_playing {
                 player.start_playback(target);
+                self.playback_start_instant = Instant::now();
+                self.playback_start_frame = target;
                 self.last_frame_time = Instant::now();
+            } else if self.seek_rx.is_some() {
+                // Seek process is already active, queue this target to prevent process flooding
+                self.pending_seek_frame = Some(target);
             } else {
                 let (tx, rx) = crossbeam_channel::bounded(1);
                 self.seek_rx = Some(rx);
@@ -598,6 +622,7 @@ impl HapLabApp {
 
                         cmd.args(&[
                             "-nostdin", "-an", "-sn", "-v", "error",
+                            "-threads", "0",
                             "-ss", &format!("{:.3}", sec),
                             "-i",
                         ])
@@ -632,6 +657,8 @@ impl HapLabApp {
                     .ok();
             }
         } else if self.reader.is_some() {
+            self.playback_start_instant = Instant::now();
+            self.playback_start_frame = target;
             self.update_preview_frame(ctx);
         }
         ctx.request_repaint();
@@ -683,7 +710,15 @@ impl HapLabApp {
         }
 
         let color_img = egui::ColorImage::from_rgba_unmultiplied([width, height], rgba);
-        self.preview_texture = Some(ctx.load_texture("player-frame", color_img, TextureOptions::LINEAR));
+        if let Some(ref mut tex) = self.preview_texture {
+            if tex.size() == [width, height] {
+                tex.set(color_img, TextureOptions::LINEAR);
+            } else {
+                self.preview_texture = Some(ctx.load_texture("player-frame", color_img, TextureOptions::LINEAR));
+            }
+        } else {
+            self.preview_texture = Some(ctx.load_texture("player-frame", color_img, TextureOptions::LINEAR));
+        }
     }
 
     fn refresh_channel_view(&mut self, ctx: &egui::Context) {
@@ -882,6 +917,12 @@ impl eframe::App for HapLabApp {
             if i.key_pressed(egui::Key::I) {
                 self.show_hud_overlay = !self.show_hud_overlay;
             }
+            if i.key_pressed(egui::Key::F11) {
+                self.toggle_fullscreen(ctx);
+            }
+            if i.key_pressed(egui::Key::Escape) && self.is_fullscreen {
+                self.toggle_fullscreen(ctx);
+            }
 
             if i.key_pressed(egui::Key::Space) {
                 if self.has_video_loaded() {
@@ -932,23 +973,29 @@ impl eframe::App for HapLabApp {
             }
         });
 
-        // 3. Playback Frame Interval Tick
+        // 3. Playback Frame Clock Synchronization
         if self.is_playing {
             if let Some(ref reader) = self.reader {
                 let fps = reader.fps().max(1.0);
-                let frame_interval = 1.0 / fps;
-                if self.last_frame_time.elapsed().as_secs_f32() >= frame_interval {
-                    let count = reader.frame_count();
-                    if count > 0 {
-                        if self.current_frame + 1 < count {
-                            self.current_frame += 1;
-                        } else if self.loop_playback {
-                            self.current_frame = 0;
+                let count = reader.frame_count();
+                let elapsed_secs = self.playback_start_instant.elapsed().as_secs_f64();
+                let mut target_frame = self.playback_start_frame + (elapsed_secs * fps as f64).floor() as usize;
+
+                if count > 0 {
+                    if target_frame >= count {
+                        if self.loop_playback {
+                            self.playback_start_instant = Instant::now();
+                            self.playback_start_frame = 0;
+                            target_frame = 0;
                         } else {
                             self.is_playing = false;
+                            target_frame = count.saturating_sub(1);
                         }
                     }
-                    self.last_frame_time = Instant::now();
+                }
+
+                if target_frame != self.current_frame {
+                    self.current_frame = target_frame;
                     self.update_preview_frame(ctx);
 
                     self.playback_frames_count += 1;
@@ -962,38 +1009,65 @@ impl eframe::App for HapLabApp {
                 ctx.request_repaint();
             } else if let Some(ref mut player) = self.generic_player {
                 let fps = player.fps.max(1.0);
-                let frame_interval = 1.0 / fps;
-                if self.last_frame_time.elapsed().as_secs_f32() >= frame_interval {
-                    match player.try_recv_frame() {
-                        Ok((frame_idx, mut rgba)) => {
-                            self.current_frame = frame_idx;
-                            let w = player.play_width;
-                            let h = player.play_height;
-                            self.raw_frame_cache = Some(rgba.clone());
-                            self.rebuild_texture_from_cache(ctx, w, h, &mut rgba);
-                            self.last_frame_time = Instant::now();
+                let total = player.total_frames;
+                let elapsed_secs = self.playback_start_instant.elapsed().as_secs_f64();
+                let mut target_frame = self.playback_start_frame + (elapsed_secs * fps as f64).floor() as usize;
 
-                            self.playback_frames_count += 1;
-                            let elapsed = self.playback_timer.elapsed().as_secs_f32();
-                            if elapsed >= 0.5 {
-                                self.playback_fps = (self.playback_frames_count as f32) / elapsed;
-                                self.playback_frames_count = 0;
-                                self.playback_timer = Instant::now();
+                if total > 0 && target_frame >= total {
+                    if self.loop_playback {
+                        self.playback_start_instant = Instant::now();
+                        self.playback_start_frame = 0;
+                        self.current_frame = 0;
+                        player.start_playback(0);
+                        target_frame = 0;
+                    } else {
+                        self.is_playing = false;
+                        player.stop_playback();
+                        target_frame = total.saturating_sub(1);
+                    }
+                }
+
+                // Drain frames up to target_frame from player channel so we never lag behind wall clock
+                let mut latest_frame: Option<(usize, Vec<u8>)> = None;
+                loop {
+                    match player.try_recv_frame() {
+                        Ok((frame_idx, rgba)) => {
+                            if frame_idx <= target_frame {
+                                latest_frame = Some((frame_idx, rgba));
+                            } else {
+                                latest_frame = Some((frame_idx, rgba));
+                                break;
                             }
                         }
-                        Err(crossbeam_channel::TryRecvError::Empty) => {
-                            // Waiting on background decoder stream
-                        }
+                        Err(crossbeam_channel::TryRecvError::Empty) => break,
                         Err(crossbeam_channel::TryRecvError::Disconnected) => {
-                            if self.loop_playback && player.total_frames > 0 {
+                            if self.loop_playback && total > 0 {
+                                self.playback_start_instant = Instant::now();
+                                self.playback_start_frame = 0;
                                 self.current_frame = 0;
                                 player.start_playback(0);
-                                self.last_frame_time = Instant::now();
                             } else {
                                 self.is_playing = false;
                                 player.stop_playback();
                             }
+                            break;
                         }
+                    }
+                }
+
+                if let Some((frame_idx, mut rgba)) = latest_frame {
+                    self.current_frame = frame_idx;
+                    let w = player.play_width;
+                    let h = player.play_height;
+                    self.raw_frame_cache = Some(rgba.clone());
+                    self.rebuild_texture_from_cache(ctx, w, h, &mut rgba);
+
+                    self.playback_frames_count += 1;
+                    let elapsed = self.playback_timer.elapsed().as_secs_f32();
+                    if elapsed >= 0.5 {
+                        self.playback_fps = (self.playback_frames_count as f32) / elapsed;
+                        self.playback_frames_count = 0;
+                        self.playback_timer = Instant::now();
                     }
                 }
                 ctx.request_repaint();
@@ -1004,17 +1078,23 @@ impl eframe::App for HapLabApp {
         if let Some(ref rx) = self.seek_rx {
             match rx.try_recv() {
                 Ok((target_frame, mut rgba)) => {
-                    if target_frame == self.current_frame {
-                        let w = self.video_width();
-                        let h = self.video_height();
-                        self.raw_frame_cache = Some(rgba.clone());
-                        self.rebuild_texture_from_cache(ctx, w, h, &mut rgba);
-                    }
+                    self.current_frame = target_frame;
+                    let w = self.video_width();
+                    let h = self.video_height();
+                    self.raw_frame_cache = Some(rgba.clone());
+                    self.rebuild_texture_from_cache(ctx, w, h, &mut rgba);
                     self.seek_rx = None;
+
+                    if let Some(next_target) = self.pending_seek_frame.take() {
+                        self.seek_to_frame(next_target, ctx);
+                    }
                     ctx.request_repaint();
                 }
                 Err(crossbeam_channel::TryRecvError::Disconnected) => {
                     self.seek_rx = None;
+                    if let Some(next_target) = self.pending_seek_frame.take() {
+                        self.seek_to_frame(next_target, ctx);
+                    }
                 }
                 Err(crossbeam_channel::TryRecvError::Empty) => {
                     ctx.request_repaint();
@@ -1667,12 +1747,41 @@ impl eframe::App for HapLabApp {
                 let slider = egui::Slider::new(&mut self.current_frame, 0..=max_frame)
                     .show_value(false)
                     .trailing_fill(true);
-                ui.add_enabled_ui(has_video && count > 0, |ui| {
-                    ui.add_sized([ui.available_width(), 18.0], slider);
-                });
+                let slider_resp = ui.add_enabled_ui(has_video && count > 0, |ui| {
+                    ui.add_sized([ui.available_width(), 18.0], slider)
+                }).inner;
 
-                if has_video && old_frame != self.current_frame {
-                    self.seek_to_frame(self.current_frame, &ctx);
+                if has_video {
+                    if slider_resp.drag_started() {
+                        if self.is_playing {
+                            self.was_playing_before_scrub = true;
+                            self.is_playing = false;
+                            if let Some(ref mut player) = self.generic_player {
+                                player.stop_playback();
+                            }
+                        }
+                    }
+                    if slider_resp.dragged() && old_frame != self.current_frame {
+                        self.seek_to_frame(self.current_frame, &ctx);
+                    }
+                    if slider_resp.drag_stopped() {
+                        if self.was_playing_before_scrub {
+                            self.was_playing_before_scrub = false;
+                            self.is_playing = true;
+                            self.playback_start_instant = Instant::now();
+                            self.playback_start_frame = self.current_frame;
+                            self.last_frame_time = Instant::now();
+                            self.playback_timer = Instant::now();
+                            self.playback_frames_count = 0;
+                            if let Some(ref mut player) = self.generic_player {
+                                player.start_playback(self.current_frame);
+                            }
+                        } else {
+                            self.seek_to_frame(self.current_frame, &ctx);
+                        }
+                    } else if !slider_resp.dragged() && old_frame != self.current_frame {
+                        self.seek_to_frame(self.current_frame, &ctx);
+                    }
                 }
 
                 ui.add_space(4.0);
@@ -1781,12 +1890,55 @@ impl eframe::App for HapLabApp {
                             self.seek_to_frame(self.current_frame.saturating_sub(1), &ctx);
                         }
 
-                        let play_text = if self.is_playing { "Pause" } else { "Play" };
-                        let play_btn = egui::Button::new(RichText::new(play_text).strong().size(12.5))
-                            .fill(if self.is_playing { colors::ACCENT_AMBER } else { colors::ACCENT_BLUE })
-                            .corner_radius(CornerRadius::same(5));
-                        if ui.add_sized([76.0, 26.0], play_btn).on_hover_text("Play/Pause (Space)").clicked() {
+                        let (btn_rect, btn_resp) = ui.allocate_exact_size(Vec2::new(52.0, 26.0), egui::Sense::click());
+                        let btn_resp = btn_resp.on_hover_text(if self.is_playing { "Pause (Space)" } else { "Play (Space)" });
+                        if btn_resp.clicked() {
                             self.toggle_playback(&ctx);
+                        }
+
+                        let bg_color = if self.is_playing {
+                            if btn_resp.hovered() {
+                                Color32::from_rgb(235, 165, 45)
+                            } else {
+                                colors::ACCENT_AMBER
+                            }
+                        } else {
+                            if btn_resp.hovered() {
+                                Color32::from_rgb(60, 155, 255)
+                            } else {
+                                colors::ACCENT_BLUE
+                            }
+                        };
+                        ui.painter().rect_filled(btn_rect, CornerRadius::same(5), bg_color);
+
+                        let center = btn_rect.center();
+                        if self.is_playing {
+                            let bar_w = 3.5;
+                            let bar_h = 13.0;
+                            let bar_gap = 4.0;
+                            let left_bar = Rect::from_center_size(
+                                egui::pos2(center.x - (bar_w + bar_gap) * 0.5, center.y),
+                                Vec2::new(bar_w, bar_h),
+                            );
+                            let right_bar = Rect::from_center_size(
+                                egui::pos2(center.x + (bar_w + bar_gap) * 0.5, center.y),
+                                Vec2::new(bar_w, bar_h),
+                            );
+                            ui.painter().rect_filled(left_bar, CornerRadius::same(1), Color32::WHITE);
+                            ui.painter().rect_filled(right_bar, CornerRadius::same(1), Color32::WHITE);
+                        } else {
+                            let tri_w = 11.0;
+                            let tri_h = 13.0;
+                            let ox = center.x + 1.0;
+                            let oy = center.y;
+                            let p0 = egui::pos2(ox - tri_w * 0.5, oy - tri_h * 0.5);
+                            let p1 = egui::pos2(ox + tri_w * 0.5, oy);
+                            let p2 = egui::pos2(ox - tri_w * 0.5, oy + tri_h * 0.5);
+                            ui.painter().add(egui::Shape::convex_polygon(
+                                vec![p0, p1, p2],
+                                Color32::WHITE,
+                                Stroke::NONE,
+                            ));
                         }
 
                         if ui.add_enabled(count > 0, egui::Button::new(">").min_size(Vec2::new(30.0, 26.0))).on_hover_text("Step +1 Frame (Right)").clicked() {
@@ -2012,13 +2164,8 @@ impl eframe::App for HapLabApp {
 
                     ui.vertical_centered(|ui| {
                         let (rect, resp) = ui.allocate_exact_size(Vec2::new(final_w, final_h), egui::Sense::click());
-                        if resp.clicked() {
-                            if self.has_video_loaded() {
-                                self.toggle_playback(ui.ctx());
-                            }
-                        }
-                        if resp.hovered() && self.has_video_loaded() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        if resp.double_clicked() {
+                            self.toggle_fullscreen(ui.ctx());
                         }
 
                         // Paint Canvas Background

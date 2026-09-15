@@ -396,11 +396,11 @@ impl GenericVideoPlayer {
         let original_width = probe.width;
         let original_height = probe.height;
 
-        // For display texture, if dimensions exceed 1920x1080, scale down to 1080p
+        // For preview texture, if dimensions exceed 1280x720, scale down to 720p
         // to maintain 60+ FPS decode throughput and low GPU texture upload overhead.
-        let (play_width, play_height) = if original_width > 1920 || original_height > 1080 {
+        let (play_width, play_height) = if original_width > 1280 || original_height > 720 {
             let aspect = original_width as f32 / original_height.max(1) as f32;
-            let w = 1920.min(original_width);
+            let w = 1280.min(original_width);
             let h = ((w as f32 / aspect).round() as usize) & !1;
             (w, h.max(2))
         } else {
@@ -432,7 +432,7 @@ impl GenericVideoPlayer {
         let child_arc = Arc::new(Mutex::new(None));
         self.child_handle = Some(child_arc.clone());
 
-        let (tx, rx) = crossbeam_channel::bounded(4);
+        let (tx, rx) = crossbeam_channel::bounded(8);
         self.frame_rx = Some(rx);
 
         let path = self.path.clone();
@@ -458,7 +458,10 @@ impl GenericVideoPlayer {
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::piped());
 
-                cmd.args(&["-nostdin", "-an", "-sn", "-v", "error"]);
+                cmd.args(&[
+                    "-nostdin", "-an", "-sn", "-v", "error",
+                    "-threads", "0",
+                ]);
                 if start_sec > 0.04 {
                     cmd.args(&["-ss", &format!("{:.3}", start_sec)]);
                 }
@@ -565,6 +568,7 @@ impl GenericVideoPlayer {
 
         cmd.args(&[
             "-nostdin", "-an", "-sn", "-v", "error",
+            "-threads", "0",
             "-ss", &format!("{:.3}", sec),
             "-i",
         ])
@@ -594,7 +598,7 @@ impl GenericVideoPlayer {
         });
 
         let expected_len = self.play_width * self.play_height * 4;
-        match rx.recv_timeout(Duration::from_millis(600)) {
+        match rx.recv_timeout(Duration::from_millis(1200)) {
             Ok(Ok(out)) if out.stdout.len() >= expected_len => {
                 let mut data = out.stdout;
                 data.truncate(expected_len);
