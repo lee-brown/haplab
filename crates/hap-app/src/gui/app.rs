@@ -622,6 +622,7 @@ impl HapLabApp {
 
                         cmd.args(&[
                             "-nostdin", "-an", "-sn", "-v", "error",
+                            "-hwaccel", "auto",
                             "-threads", "0",
                             "-ss", &format!("{:.3}", sec),
                             "-i",
@@ -2229,7 +2230,7 @@ impl eframe::App for HapLabApp {
                                 });
                                 hud_ui.add_space(4.0);
                                 hud_ui.label(RichText::new(format!("Playback FPS: {:.1} (Target: {:.0})", self.playback_fps, p.fps)).color(colors::ACCENT_GREEN).size(11.5));
-                                hud_ui.label(RichText::new("Stream: Realtime Pipe Decoder").color(colors::TEXT_MUTED).size(11.0));
+                                hud_ui.label(RichText::new("Decoder: Hardware Accelerated (Auto)").color(colors::ACCENT_CYAN).size(11.0));
                                 hud_ui.label(RichText::new(format!("Render Target: {}x{}", p.play_width, p.play_height)).color(colors::TEXT_FAINT).size(10.5));
                             }
                         }

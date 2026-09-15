@@ -396,11 +396,11 @@ impl GenericVideoPlayer {
         let original_width = probe.width;
         let original_height = probe.height;
 
-        // For preview texture, if dimensions exceed 1280x720, scale down to 720p
+        // For preview texture, if dimensions exceed 1920x1080, scale down to 1080p
         // to maintain 60+ FPS decode throughput and low GPU texture upload overhead.
-        let (play_width, play_height) = if original_width > 1280 || original_height > 720 {
+        let (play_width, play_height) = if original_width > 1920 || original_height > 1080 {
             let aspect = original_width as f32 / original_height.max(1) as f32;
-            let w = 1280.min(original_width);
+            let w = 1920.min(original_width);
             let h = ((w as f32 / aspect).round() as usize) & !1;
             (w, h.max(2))
         } else {
@@ -460,6 +460,7 @@ impl GenericVideoPlayer {
 
                 cmd.args(&[
                     "-nostdin", "-an", "-sn", "-v", "error",
+                    "-hwaccel", "auto",
                     "-threads", "0",
                 ]);
                 if start_sec > 0.04 {
@@ -568,6 +569,7 @@ impl GenericVideoPlayer {
 
         cmd.args(&[
             "-nostdin", "-an", "-sn", "-v", "error",
+            "-hwaccel", "auto",
             "-threads", "0",
             "-ss", &format!("{:.3}", sec),
             "-i",
@@ -871,7 +873,12 @@ fn spawn_encode_from_video(
 
     let ffmpeg_bin = find_ffmpeg_binary();
     let mut cmd = std::process::Command::new(&ffmpeg_bin);
-    cmd.args(&["-nostdin", "-v", "error", "-i"])
+    cmd.args(&[
+        "-nostdin", "-v", "error",
+        "-hwaccel", "auto",
+        "-threads", "0",
+        "-i",
+    ])
         .arg(&config.input_dir)
         .args(&["-f", "rawvideo", "-pix_fmt", "rgba", "-"]);
     #[cfg(windows)]

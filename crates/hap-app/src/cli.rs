@@ -268,7 +268,12 @@ fn run_encode(args: EncodeArgs) -> Result<(), Box<dyn std::error::Error>> {
 
         let ffmpeg_bin = crate::worker::find_ffmpeg_binary();
         let mut cmd = std::process::Command::new(&ffmpeg_bin);
-        cmd.args(&["-nostdin", "-v", "error", "-i"])
+        cmd.args(&[
+            "-nostdin", "-v", "error",
+            "-hwaccel", "auto",
+            "-threads", "0",
+            "-i",
+        ])
             .arg(&args.input)
             .args(&["-f", "rawvideo", "-pix_fmt", "rgba", "-"]);
         #[cfg(windows)]
