@@ -37,27 +37,31 @@ pub fn apply_studio_theme(ctx: &egui::Context) {
     visuals.extreme_bg_color = Color32::from_rgb(11, 13, 18);
     visuals.code_bg_color = Color32::from_rgb(18, 22, 30);
 
-    visuals.widgets.noninteractive.bg_fill = colors::BG_CARD;
+    visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(20, 24, 34);
     visuals.widgets.noninteractive.bg_stroke = Stroke::NONE;
     visuals.widgets.noninteractive.corner_radius = CornerRadius::same(6);
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, colors::TEXT_PRIMARY);
 
-    visuals.widgets.inactive.bg_fill = Color32::from_rgb(28, 34, 46);
+    visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
+    visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
     visuals.widgets.inactive.bg_stroke = Stroke::NONE;
     visuals.widgets.inactive.corner_radius = CornerRadius::same(6);
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, colors::TEXT_PRIMARY);
 
     visuals.widgets.hovered.bg_fill = colors::BG_CARD_HOVER;
+    visuals.widgets.hovered.weak_bg_fill = colors::BG_CARD_HOVER;
     visuals.widgets.hovered.bg_stroke = Stroke::NONE;
     visuals.widgets.hovered.corner_radius = CornerRadius::same(6);
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::WHITE);
 
     visuals.widgets.active.bg_fill = colors::ACCENT_BLUE;
+    visuals.widgets.active.weak_bg_fill = colors::ACCENT_BLUE;
     visuals.widgets.active.bg_stroke = Stroke::NONE;
     visuals.widgets.active.corner_radius = CornerRadius::same(6);
     visuals.widgets.active.fg_stroke = Stroke::new(1.0, Color32::WHITE);
 
     visuals.widgets.open.bg_fill = colors::BG_CARD_HOVER;
+    visuals.widgets.open.weak_bg_fill = colors::BG_CARD_HOVER;
     visuals.widgets.open.bg_stroke = Stroke::NONE;
     visuals.widgets.open.corner_radius = CornerRadius::same(6);
 
@@ -137,8 +141,9 @@ pub fn render_badge(ui: &mut egui::Ui, text: &str, bg: Color32, fg: Color32) {
     let padding = Vec2::new(10.0, 4.0);
     let desired_size = galley.size() + padding * 2.0;
     let (rect, _response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
-
-    ui.painter().rect_filled(rect, CornerRadius::same(5), bg);
+    if bg != Color32::TRANSPARENT {
+        ui.painter().rect_filled(rect, CornerRadius::same(5), bg);
+    }
     let text_pos = rect.min + padding;
     ui.painter().galley(text_pos, galley, fg);
 }

@@ -1,6 +1,6 @@
 //! Background thread workers for responsive GUI progress reporting.
 
-use crossbeam_channel::Sender;
+use crossbeam_channel::{Receiver, Sender};
 use hap_core::{
     decode_frame_to_rgba, encode_frame_with_options, extract_stream_summary, AlphaMode, ColorRange,
     DitherMode, EncodeOptions, HapFormat, QualityPreset, QtHapReader, QtHapWriter, StreamSummary,
@@ -10,8 +10,8 @@ use image::GenericImageView;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub enum WorkerProgress {
@@ -148,6 +148,7 @@ pub fn is_video_container(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct VideoProbeInfo {
     pub codec: String,
@@ -170,6 +171,7 @@ pub fn probe_video_dimensions(path: &std::path::Path) -> Result<(usize, usize, u
     let mut probe_cmd = std::process::Command::new(&ffprobe_bin);
     probe_cmd
         .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .args(&[
             "-v", "error",
@@ -181,9 +183,22 @@ pub fn probe_video_dimensions(path: &std::path::Path) -> Result<(usize, usize, u
     #[cfg(windows)]
     probe_cmd.creation_flags(CREATE_NO_WINDOW);
 
-    let output = probe_cmd.output().map_err(|e| {
-        format!("Failed to execute ffprobe ({}): {}", ffprobe_bin.display(), e)
-    })?;
+    let (tx, rx) = crossbeam_channel::bounded(1);
+    let bin_display = ffprobe_bin.display().to_string();
+    std::thread::spawn(move || {
+        let res = probe_cmd.output();
+        let _ = tx.send(res);
+    });
+
+    let output = match rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(Ok(out)) => out,
+        Ok(Err(e)) => {
+            return Err(format!("Failed to execute ffprobe ({}): {}", bin_display, e));
+        }
+        Err(_) => {
+            return Err(format!("Timed out inspecting video dimensions with ffprobe ({})", bin_display));
+        }
+    };
 
     if !output.status.success() {
         let err_text = String::from_utf8_lossy(&output.stderr);
@@ -233,6 +248,7 @@ pub fn probe_video_input(path: &std::path::Path) -> Result<VideoProbeInfo, Strin
     let mut probe_cmd = std::process::Command::new(&ffprobe_bin);
     probe_cmd
         .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .args(&[
             "-v", "error",
@@ -244,9 +260,22 @@ pub fn probe_video_input(path: &std::path::Path) -> Result<VideoProbeInfo, Strin
     #[cfg(windows)]
     probe_cmd.creation_flags(CREATE_NO_WINDOW);
 
-    let output = probe_cmd.output().map_err(|e| {
-        format!("FFmpeg/FFprobe not found on system PATH ({}). Install FFmpeg to import video files directly, or supply an image sequence (PNG, TIFF, JPEG).", e)
-    })?;
+    let (p_tx, p_rx) = crossbeam_channel::bounded(1);
+    let probe_bin_display = ffprobe_bin.display().to_string();
+    std::thread::spawn(move || {
+        let res = probe_cmd.output();
+        let _ = p_tx.send(res);
+    });
+
+    let output = match p_rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(Ok(out)) => out,
+        Ok(Err(e)) => {
+            return Err(format!("FFmpeg/FFprobe not found on system PATH ({}). Install FFmpeg to import video files directly, or supply an image sequence (PNG, TIFF, JPEG).", e));
+        }
+        Err(_) => {
+            return Err(format!("Timed out inspecting video metadata using ffprobe ({})", probe_bin_display));
+        }
+    };
 
     if !output.status.success() {
         let err_text = String::from_utf8_lossy(&output.stderr);
@@ -305,15 +334,22 @@ pub fn probe_video_input(path: &std::path::Path) -> Result<VideoProbeInfo, Strin
     let mut thumb_cmd = std::process::Command::new(&ffmpeg_bin);
     thumb_cmd
         .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .args(&["-nostdin", "-v", "error", "-ss", "00:00:00", "-i"])
+        .args(&["-nostdin", "-an", "-sn", "-v", "error", "-ss", "00:00:00", "-i"])
         .arg(path)
-        .args(&["-vframes", "1", "-f", "image2pipe", "-vcodec", "png", "-"]);
+        .args(&["-vframes", "1", "-vf", "scale=min(640\\,iw):-2", "-f", "image2pipe", "-vcodec", "png", "-"]);
     #[cfg(windows)]
     thumb_cmd.creation_flags(CREATE_NO_WINDOW);
 
-    let thumbnail_rgba = if let Ok(thumb_out) = thumb_cmd.output() {
-        if thumb_out.status.success() && !thumb_out.stdout.is_empty() {
+    let (t_tx, t_rx) = crossbeam_channel::bounded(1);
+    std::thread::spawn(move || {
+        let res = thumb_cmd.output();
+        let _ = t_tx.send(res);
+    });
+
+    let thumbnail_rgba = match t_rx.recv_timeout(Duration::from_secs(3)) {
+        Ok(Ok(thumb_out)) if thumb_out.status.success() && !thumb_out.stdout.is_empty() => {
             if let Ok(img) = image::load_from_memory(&thumb_out.stdout) {
                 let rgba = img.to_rgba8();
                 let (w, h) = rgba.dimensions();
@@ -321,11 +357,8 @@ pub fn probe_video_input(path: &std::path::Path) -> Result<VideoProbeInfo, Strin
             } else {
                 None
             }
-        } else {
-            None
         }
-    } else {
-        None
+        _ => None,
     };
 
     Ok(VideoProbeInfo {
@@ -337,6 +370,245 @@ pub fn probe_video_input(path: &std::path::Path) -> Result<VideoProbeInfo, Strin
         duration_secs: duration,
         thumbnail_rgba,
     })
+}
+
+/// Player engine for generic video formats (H.264 MP4, HEVC, MKV, AVI, WebM, ProRes)
+/// streaming raw decoded video frames over anonymous OS pipes in real time.
+pub struct GenericVideoPlayer {
+    pub path: PathBuf,
+    pub original_width: usize,
+    pub original_height: usize,
+    pub play_width: usize,
+    pub play_height: usize,
+    pub fps: f32,
+    pub total_frames: usize,
+    #[allow(dead_code)]
+    pub duration_secs: f32,
+    pub codec: String,
+
+    frame_rx: Option<Receiver<(usize, Vec<u8>)>>,
+    cancel_flag: Option<Arc<AtomicBool>>,
+    child_handle: Option<Arc<Mutex<Option<std::process::Child>>>>,
+}
+
+impl GenericVideoPlayer {
+    pub fn new(path: PathBuf, probe: &VideoProbeInfo) -> Self {
+        let original_width = probe.width;
+        let original_height = probe.height;
+
+        // For display texture, if dimensions exceed 1920x1080, scale down to 1080p
+        // to maintain 60+ FPS decode throughput and low GPU texture upload overhead.
+        let (play_width, play_height) = if original_width > 1920 || original_height > 1080 {
+            let aspect = original_width as f32 / original_height.max(1) as f32;
+            let w = 1920.min(original_width);
+            let h = ((w as f32 / aspect).round() as usize) & !1;
+            (w, h.max(2))
+        } else {
+            (original_width, original_height)
+        };
+
+        Self {
+            path,
+            original_width,
+            original_height,
+            play_width,
+            play_height,
+            fps: probe.fps.max(1.0),
+            total_frames: probe.frame_count,
+            duration_secs: probe.duration_secs,
+            codec: probe.codec.clone(),
+            frame_rx: None,
+            cancel_flag: None,
+            child_handle: None,
+        }
+    }
+
+    pub fn start_playback(&mut self, start_frame: usize) {
+        self.stop_playback();
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.cancel_flag = Some(cancel.clone());
+
+        let child_arc = Arc::new(Mutex::new(None));
+        self.child_handle = Some(child_arc.clone());
+
+        let (tx, rx) = crossbeam_channel::bounded(4);
+        self.frame_rx = Some(rx);
+
+        let path = self.path.clone();
+        let pw = self.play_width;
+        let ph = self.play_height;
+        let orig_w = self.original_width;
+        let orig_h = self.original_height;
+        let fps = self.fps;
+        let total = self.total_frames;
+
+        std::thread::Builder::new()
+            .name("generic-video-player".to_string())
+            .spawn(move || {
+                #[cfg(windows)]
+                use std::os::windows::process::CommandExt;
+                #[cfg(windows)]
+                const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+                let start_sec = (start_frame as f64) / (fps as f64);
+                let ffmpeg_bin = find_ffmpeg_binary();
+                let mut cmd = std::process::Command::new(&ffmpeg_bin);
+                cmd.stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
+
+                cmd.args(&["-nostdin", "-an", "-sn", "-v", "error"]);
+                if start_sec > 0.04 {
+                    cmd.args(&["-ss", &format!("{:.3}", start_sec)]);
+                }
+                cmd.arg("-i").arg(&path);
+
+                if pw != orig_w || ph != orig_h {
+                    cmd.args(&["-vf", &format!("scale={}:{}", pw, ph)]);
+                }
+
+                cmd.args(&["-f", "rawvideo", "-pix_fmt", "rgba", "-"]);
+
+                #[cfg(windows)]
+                cmd.creation_flags(CREATE_NO_WINDOW);
+
+                let mut child = match cmd.spawn() {
+                    Ok(c) => c,
+                    Err(_) => return,
+                };
+
+                let mut stdout = match child.stdout.take() {
+                    Some(s) => s,
+                    None => {
+                        let _ = child.kill();
+                        return;
+                    }
+                };
+
+                if let Ok(mut lock) = child_arc.lock() {
+                    *lock = Some(child);
+                }
+
+                let frame_size = pw * ph * 4;
+                let mut current_idx = start_frame;
+
+                loop {
+                    if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    let mut buf = vec![0u8; frame_size];
+                    use std::io::Read;
+                    match stdout.read_exact(&mut buf) {
+                        Ok(()) => {
+                            if tx.send((current_idx, buf)).is_err() {
+                                break;
+                            }
+                            current_idx += 1;
+                            if total > 0 && current_idx >= total {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+
+                if let Ok(mut lock) = child_arc.lock() {
+                    if let Some(mut c) = lock.take() {
+                        let _ = c.kill();
+                        let _ = c.wait();
+                    }
+                }
+            })
+            .ok();
+    }
+
+    pub fn stop_playback(&mut self) {
+        if let Some(ref cancel) = self.cancel_flag {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        if let Some(ref child_arc) = self.child_handle {
+            if let Ok(mut lock) = child_arc.lock() {
+                if let Some(mut c) = lock.take() {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
+            }
+        }
+        self.frame_rx = None;
+        self.cancel_flag = None;
+        self.child_handle = None;
+    }
+
+    pub fn try_recv_frame(&self) -> Result<(usize, Vec<u8>), crossbeam_channel::TryRecvError> {
+        if let Some(ref rx) = self.frame_rx {
+            rx.try_recv()
+        } else {
+            Err(crossbeam_channel::TryRecvError::Disconnected)
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn is_streaming(&self) -> bool {
+        self.frame_rx.is_some()
+    }
+
+    #[allow(dead_code)]
+    pub fn fetch_single_frame(&self, frame_idx: usize) -> Option<Vec<u8>> {
+        let sec = (frame_idx as f64) / (self.fps as f64);
+        let ffmpeg_bin = find_ffmpeg_binary();
+        let mut cmd = std::process::Command::new(&ffmpeg_bin);
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        cmd.args(&[
+            "-nostdin", "-an", "-sn", "-v", "error",
+            "-ss", &format!("{:.3}", sec),
+            "-i",
+        ])
+        .arg(&self.path);
+
+        if self.play_width != self.original_width || self.play_height != self.original_height {
+            cmd.args(&["-vf", &format!("scale={}:{}", self.play_width, self.play_height)]);
+        }
+
+        cmd.args(&[
+            "-vframes", "1",
+            "-f", "rawvideo",
+            "-pix_fmt", "rgba",
+            "-",
+        ]);
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        std::thread::spawn(move || {
+            let res = cmd.output();
+            let _ = tx.send(res);
+        });
+
+        let expected_len = self.play_width * self.play_height * 4;
+        match rx.recv_timeout(Duration::from_millis(600)) {
+            Ok(Ok(out)) if out.stdout.len() >= expected_len => {
+                let mut data = out.stdout;
+                data.truncate(expected_len);
+                Some(data)
+            }
+            _ => None,
+        }
+    }
+}
+
+impl Drop for GenericVideoPlayer {
+    fn drop(&mut self) {
+        self.stop_playback();
+    }
 }
 
 pub fn spawn_encode_worker(
@@ -875,9 +1147,15 @@ pub fn spawn_media_loader(path: PathBuf, tx: Sender<MediaLoadResult>) {
                 }
             }
 
-            // 3. QuickTime HAP MOV check
-            match QtHapReader::open(&path) {
-                Ok(mut reader) => {
+            // 3. QuickTime HAP MOV check (only attempt MOV parser on .mov files)
+            let is_mov = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("mov"))
+                .unwrap_or(false);
+
+            if is_mov {
+                if let Ok(mut reader) = QtHapReader::open(&path) {
                     let file_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                     let summary = extract_stream_summary(&mut reader, file_size).ok();
                     let (first_rgba, decode_ms, pkt_bytes) = if let Ok(pkt) = reader.read_frame_packet(0) {
@@ -900,47 +1178,46 @@ pub fn spawn_media_loader(path: PathBuf, tx: Sender<MediaLoadResult>) {
                     });
                     return;
                 }
-                Err(hap_err) => {
-                    // Check if it is a video container
-                    if is_video_container(&path) {
-                        match probe_video_input(&path) {
-                            Ok(probe) => {
-                                let _ = tx.send(MediaLoadResult::GenericVideo {
-                                    path,
-                                    probe,
-                                });
-                                return;
-                            }
-                            Err(probe_err) => {
-                                let _ = tx.send(MediaLoadResult::Failed {
-                                    path,
-                                    error: format!("Unable to parse video stream ({}). Probe note: {}", hap_err, probe_err),
-                                });
-                                return;
-                            }
-                        }
-                    }
+            }
 
-                    // Fallback: attempt image decode in case extension was missing
-                    if let Ok(img) = image::open(&path) {
-                        let w = img.width() as usize;
-                        let h = img.height() as usize;
-                        let rgba = img.to_rgba8().into_raw();
-                        let _ = tx.send(MediaLoadResult::StillImage {
+            // 4. Video container check (MP4, MKV, AVI, WebM, non-HAP MOV, etc.)
+            if is_video_container(&path) {
+                match probe_video_input(&path) {
+                    Ok(probe) => {
+                        let _ = tx.send(MediaLoadResult::GenericVideo {
                             path,
-                            width: w,
-                            height: h,
-                            rgba,
+                            probe,
                         });
                         return;
                     }
-
-                    let _ = tx.send(MediaLoadResult::Failed {
-                        path,
-                        error: format!("Unrecognized file format: {}", hap_err),
-                    });
+                    Err(probe_err) => {
+                        let _ = tx.send(MediaLoadResult::Failed {
+                            path,
+                            error: format!("Unable to parse video stream: {}", probe_err),
+                        });
+                        return;
+                    }
                 }
             }
+
+            // 5. Fallback: attempt image decode in case extension was missing
+            if let Ok(img) = image::open(&path) {
+                let w = img.width() as usize;
+                let h = img.height() as usize;
+                let rgba = img.to_rgba8().into_raw();
+                let _ = tx.send(MediaLoadResult::StillImage {
+                    path,
+                    width: w,
+                    height: h,
+                    rgba,
+                });
+                return;
+            }
+
+            let _ = tx.send(MediaLoadResult::Failed {
+                path,
+                error: "Unrecognized or unsupported media format".to_string(),
+            });
         })
         .ok();
 }
@@ -1155,5 +1432,59 @@ mod tests {
         let _ = fs::remove_file(mov_path);
         let _ = fs::remove_dir(temp_dir);
     }
+
+    #[test]
+    fn test_spawn_media_loader_mp4() {
+        let ffmpeg_bin = find_ffmpeg_binary();
+        let temp_dir = std::env::temp_dir().join("haplab_test_loader_mp4");
+        let _ = fs::create_dir_all(&temp_dir);
+        let mp4_path = temp_dir.join("loader_test.mp4");
+
+        #[cfg(windows)]
+        use std::os::windows::process::CommandExt;
+        #[cfg(windows)]
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        let mut gen_cmd = std::process::Command::new(&ffmpeg_bin);
+        gen_cmd.args(&[
+            "-nostdin",
+            "-y",
+            "-f", "lavfi",
+            "-i", "testsrc=size=64x64:rate=30",
+            "-vframes", "2",
+        ])
+        .arg(&mp4_path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+        #[cfg(windows)]
+        gen_cmd.creation_flags(CREATE_NO_WINDOW);
+
+        if let Ok(status) = gen_cmd.status() {
+            if !status.success() {
+                return;
+            }
+        } else {
+            return;
+        }
+
+        let (tx, rx) = crossbeam_channel::unbounded();
+        spawn_media_loader(mp4_path.clone(), tx);
+
+        let result = rx.recv_timeout(Duration::from_secs(6)).expect("Loader should respond within timeout");
+        match result {
+            MediaLoadResult::GenericVideo { path, probe } => {
+                assert_eq!(path, mp4_path);
+                assert_eq!(probe.width, 64);
+                assert_eq!(probe.height, 64);
+                assert_eq!(probe.frame_count, 2);
+            }
+            other => panic!("Expected GenericVideo result, got {:?}", std::mem::discriminant(&other)),
+        }
+
+        let _ = fs::remove_file(mp4_path);
+        let _ = fs::remove_dir(temp_dir);
+    }
 }
+
 
