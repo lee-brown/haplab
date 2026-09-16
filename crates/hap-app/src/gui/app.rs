@@ -624,13 +624,14 @@ impl HapLabApp {
                             "-nostdin", "-an", "-sn", "-v", "error",
                             "-hwaccel", "auto",
                             "-threads", "0",
+                            "-sws_flags", "fast_bilinear",
                             "-ss", &format!("{:.3}", sec),
                             "-i",
                         ])
                         .arg(&path);
 
                         if pw != orig_w || ph != orig_h {
-                            cmd.args(&["-vf", &format!("scale={}:{}", pw, ph)]);
+                            cmd.args(&["-vf", &format!("scale={}:{}:flags=fast_bilinear", pw, ph)]);
                         }
 
                         cmd.args(&[
@@ -1080,8 +1081,7 @@ impl eframe::App for HapLabApp {
         // 3b. Asynchronous Seek Frame Polling
         if let Some(ref rx) = self.seek_rx {
             match rx.try_recv() {
-                Ok((target_frame, mut rgba)) => {
-                    self.current_frame = target_frame;
+                Ok((_target_frame, mut rgba)) => {
                     let w = self.video_width();
                     let h = self.video_height();
                     self.raw_frame_cache = Some(rgba.clone());
@@ -1792,23 +1792,25 @@ impl eframe::App for HapLabApp {
                 // Transport controls & details row
                 ui.horizontal(|ui| {
                     // Left: SMPTE timecode and frame counter
-                    let timecode = if has_video {
-                        format_smpte_timecode(self.current_frame, fps)
+                    let timecode_str = if has_video {
+                        let cur_tc = format_smpte_timecode(self.current_frame, fps);
+                        let total_tc = format_smpte_timecode(count.saturating_sub(1), fps);
+                        format!("{} / {}", cur_tc, total_tc)
                     } else if is_still_image {
-                        "00:00:00:01".to_string()
+                        "00:00:00:01 / 00:00:00:01".to_string()
                     } else {
-                        "00:00:00:00".to_string()
+                        "00:00:00:00 / 00:00:00:00".to_string()
                     };
                     let tc_color = if has_video || is_still_image { colors::ACCENT_CYAN } else { colors::TEXT_FAINT };
-                    ui.label(RichText::new(timecode).monospace().size(14.0).color(tc_color).strong());
+                    ui.label(RichText::new(timecode_str).monospace().size(13.0).color(tc_color).strong());
 
                     if has_video {
                         let pct = if count > 0 { (self.current_frame as f32 / count as f32) * 100.0 } else { 0.0 };
-                        ui.monospace(format!("{}/{} ({:.0}%)", self.current_frame + 1, count, pct));
+                        ui.monospace(format!("{}/{} frames ({:.0}%)", self.current_frame + 1, count, pct));
                     } else if is_still_image {
                         ui.monospace("1/1 (Image)");
                     } else if count > 0 {
-                        ui.monospace(format!("0/{} (Source)", count));
+                        ui.monospace(format!("0/{} frames", count));
                     } else {
                         ui.monospace("0/0 (0%)");
                     }

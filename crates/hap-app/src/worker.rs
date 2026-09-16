@@ -160,8 +160,119 @@ pub struct VideoProbeInfo {
     pub thumbnail_rgba: Option<(u32, u32, Vec<u8>)>,
 }
 
-/// Quickly probe video dimensions and stream metadata without extracting thumbnails.
-pub fn probe_video_dimensions(path: &std::path::Path) -> Result<(usize, usize, usize, f32), String> {
+/// Key-value parser for ffprobe output supporting format duration and avg_frame_rate.
+pub fn parse_probe_output(out_str: &str) -> Result<(String, usize, usize, f32, usize, f32), String> {
+    let mut codec_raw = String::new();
+    let mut width = 0usize;
+    let mut height = 0usize;
+    let mut r_fps_str = String::new();
+    let mut avg_fps_str = String::new();
+    let mut durations: Vec<f32> = Vec::new();
+    let mut nb_frames = 0usize;
+
+    for line in out_str.lines() {
+        let line = line.trim();
+        if let Some((k, v)) = line.split_once('=') {
+            let k = k.trim();
+            let v = v.trim();
+            match k {
+                "codec_name" => codec_raw = v.to_string(),
+                "width" => width = v.parse().unwrap_or(0),
+                "height" => height = v.parse().unwrap_or(0),
+                "r_frame_rate" => r_fps_str = v.to_string(),
+                "avg_frame_rate" => avg_fps_str = v.to_string(),
+                "duration" => {
+                    if let Ok(d) = v.parse::<f32>() {
+                        if d > 0.0 {
+                            durations.push(d);
+                        }
+                    }
+                }
+                "nb_frames" => {
+                    if let Ok(n) = v.parse::<usize>() {
+                        nb_frames = n;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if width == 0 || height == 0 {
+        return Err("Could not parse valid video dimensions from ffprobe output.".into());
+    }
+
+    let codec = match codec_raw.to_lowercase().as_str() {
+        "h264" | "avc1" => "H.264 / AVC".to_string(),
+        "hevc" | "h265" | "hev1" => "H.265 / HEVC".to_string(),
+        "av1" | "av01" => "AV1".to_string(),
+        "prores" => "Apple ProRes".to_string(),
+        "vp9" => "VP9".to_string(),
+        "vp8" => "VP8".to_string(),
+        "dnxhd" | "dnxhr" => "Avid DNxHD/HR".to_string(),
+        other => {
+            if other.is_empty() {
+                "Video".to_string()
+            } else {
+                other.to_uppercase()
+            }
+        }
+    };
+
+    let parse_rate = |s: &str| -> Option<f32> {
+        if let Some((num, den)) = s.split_once('/') {
+            let n: f32 = num.trim().parse().ok()?;
+            let d: f32 = den.trim().parse().ok()?;
+            if d > 0.0 {
+                Some(n / d)
+            } else {
+                None
+            }
+        } else {
+            s.trim().parse().ok()
+        }
+    };
+
+    let avg_fps = parse_rate(&avg_fps_str);
+    let r_fps = parse_rate(&r_fps_str);
+
+    let fps: f32 = if let Some(f) = avg_fps.filter(|&f| f > 0.1 && f < 300.0) {
+        f
+    } else if let Some(f) = r_fps.filter(|&f| f > 0.1 && f < 300.0) {
+        f
+    } else {
+        30.0
+    };
+
+    let duration: f32 = durations.iter().copied().find(|&d| d > 0.0).unwrap_or(0.0);
+
+    let frame_count: usize = if nb_frames > 0 {
+        if duration > 0.0 && fps > 0.0 {
+            let estimated = (duration * fps).round() as usize;
+            if nb_frames >= estimated / 2 && nb_frames <= estimated.saturating_mul(2) + 10 {
+                nb_frames
+            } else {
+                estimated
+            }
+        } else {
+            nb_frames
+        }
+    } else if duration > 0.0 && fps > 0.0 {
+        (duration * fps).round() as usize
+    } else {
+        1
+    };
+
+    let duration = if duration == 0.0 && frame_count > 0 && fps > 0.0 {
+        frame_count as f32 / fps
+    } else {
+        duration
+    };
+
+    Ok((codec, width, height, fps, frame_count, duration))
+}
+
+pub fn probe_video_metadata(path: &std::path::Path) -> Result<(String, usize, usize, f32, usize, f32), String> {
     #[cfg(windows)]
     use std::os::windows::process::CommandExt;
     #[cfg(windows)]
@@ -176,8 +287,8 @@ pub fn probe_video_dimensions(path: &std::path::Path) -> Result<(usize, usize, u
         .args(&[
             "-v", "error",
             "-select_streams", "v:0",
-            "-show_entries", "stream=width,height,r_frame_rate,duration,nb_frames",
-            "-of", "csv=p=0",
+            "-show_entries", "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,duration,nb_frames:format=duration",
+            "-of", "default=noprint_wrappers=1",
         ])
         .arg(path);
     #[cfg(windows)]
@@ -196,84 +307,7 @@ pub fn probe_video_dimensions(path: &std::path::Path) -> Result<(usize, usize, u
             return Err(format!("Failed to execute ffprobe ({}): {}", bin_display, e));
         }
         Err(_) => {
-            return Err(format!("Timed out inspecting video dimensions with ffprobe ({})", bin_display));
-        }
-    };
-
-    if !output.status.success() {
-        let err_text = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Could not inspect video dimensions using ffprobe: {}", err_text.trim()));
-    }
-
-    let out_str = String::from_utf8_lossy(&output.stdout);
-    let parts: Vec<&str> = out_str.trim().split(',').collect();
-    if parts.len() < 3 {
-        return Err("Could not parse video stream dimensions from ffprobe output.".into());
-    }
-
-    let width: usize = parts[0].trim().parse().map_err(|_| "Invalid width")?;
-    let height: usize = parts[1].trim().parse().map_err(|_| "Invalid height")?;
-
-    let fps_str = parts[2].trim();
-    let fps: f32 = if let Some((num, den)) = fps_str.split_once('/') {
-        let n: f32 = num.parse().unwrap_or(30.0);
-        let d: f32 = den.parse().unwrap_or(1.0);
-        if d > 0.0 { n / d } else { 30.0 }
-    } else {
-        fps_str.parse().unwrap_or(30.0)
-    };
-
-    let duration: f32 = parts.get(3).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
-    let frame_count: usize = parts.get(4)
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or_else(|| {
-            if duration > 0.0 && fps > 0.0 {
-                (duration * fps).round() as usize
-            } else {
-                0
-            }
-        });
-
-    Ok((width, height, frame_count, fps))
-}
-
-pub fn probe_video_input(path: &std::path::Path) -> Result<VideoProbeInfo, String> {
-    #[cfg(windows)]
-    use std::os::windows::process::CommandExt;
-    #[cfg(windows)]
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-    // 1. Try ffprobe for codec, dimensions, framerate, duration, frame count
-    let ffprobe_bin = find_ffprobe_binary();
-    let mut probe_cmd = std::process::Command::new(&ffprobe_bin);
-    probe_cmd
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .args(&[
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=codec_name,width,height,r_frame_rate,duration,nb_frames",
-            "-of", "csv=p=0",
-        ])
-        .arg(path);
-    #[cfg(windows)]
-    probe_cmd.creation_flags(CREATE_NO_WINDOW);
-
-    let (p_tx, p_rx) = crossbeam_channel::bounded(1);
-    let probe_bin_display = ffprobe_bin.display().to_string();
-    std::thread::spawn(move || {
-        let res = probe_cmd.output();
-        let _ = p_tx.send(res);
-    });
-
-    let output = match p_rx.recv_timeout(Duration::from_secs(5)) {
-        Ok(Ok(out)) => out,
-        Ok(Err(e)) => {
-            return Err(format!("FFmpeg/FFprobe not found on system PATH ({}). Install FFmpeg to import video files directly, or supply an image sequence (PNG, TIFF, JPEG).", e));
-        }
-        Err(_) => {
-            return Err(format!("Timed out inspecting video metadata using ffprobe ({})", probe_bin_display));
+            return Err(format!("Timed out inspecting video metadata with ffprobe ({})", bin_display));
         }
     };
 
@@ -283,51 +317,22 @@ pub fn probe_video_input(path: &std::path::Path) -> Result<VideoProbeInfo, Strin
     }
 
     let out_str = String::from_utf8_lossy(&output.stdout);
-    let parts: Vec<&str> = out_str.trim().split(',').collect();
-    if parts.len() < 4 {
-        return Err("Could not parse video metadata from ffprobe output.".into());
-    }
+    parse_probe_output(&out_str)
+}
 
-    let codec_raw = parts[0].trim();
-    let codec = match codec_raw.to_lowercase().as_str() {
-        "h264" | "avc1" => "H.264 / AVC".to_string(),
-        "hevc" | "h265" | "hev1" => "H.265 / HEVC".to_string(),
-        "av1" | "av01" => "AV1".to_string(),
-        "prores" => "Apple ProRes".to_string(),
-        "vp9" => "VP9".to_string(),
-        "vp8" => "VP8".to_string(),
-        "dnxhd" | "dnxhr" => "Avid DNxHD/HR".to_string(),
-        other => {
-            if other.is_empty() {
-                "Video".to_string()
-            } else {
-                other.to_uppercase()
-            }
-        }
-    };
+/// Quickly probe video dimensions and stream metadata without extracting thumbnails.
+pub fn probe_video_dimensions(path: &std::path::Path) -> Result<(usize, usize, usize, f32), String> {
+    let (_codec, width, height, fps, frame_count, _duration) = probe_video_metadata(path)?;
+    Ok((width, height, frame_count, fps))
+}
 
-    let width: usize = parts[1].trim().parse().map_err(|_| "Invalid width")?;
-    let height: usize = parts[2].trim().parse().map_err(|_| "Invalid height")?;
+pub fn probe_video_input(path: &std::path::Path) -> Result<VideoProbeInfo, String> {
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
+    #[cfg(windows)]
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-    let fps_str = parts[3].trim();
-    let fps: f32 = if let Some((num, den)) = fps_str.split_once('/') {
-        let n: f32 = num.parse().unwrap_or(30.0);
-        let d: f32 = den.parse().unwrap_or(1.0);
-        if d > 0.0 { n / d } else { 30.0 }
-    } else {
-        fps_str.parse().unwrap_or(30.0)
-    };
-
-    let duration: f32 = parts.get(4).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
-    let frame_count: usize = parts.get(5)
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or_else(|| {
-            if duration > 0.0 && fps > 0.0 {
-                (duration * fps).round() as usize
-            } else {
-                0
-            }
-        });
+    let (codec, width, height, fps, frame_count, duration) = probe_video_metadata(path)?;
 
     // 2. Extract 1st frame thumbnail via ffmpeg
     let ffmpeg_bin = find_ffmpeg_binary();
@@ -415,7 +420,7 @@ impl GenericVideoPlayer {
             play_width,
             play_height,
             fps: probe.fps.max(1.0),
-            total_frames: probe.frame_count,
+            total_frames: probe.frame_count.max(1),
             duration_secs: probe.duration_secs,
             codec: probe.codec.clone(),
             stashed_frame: None,
@@ -584,13 +589,14 @@ impl GenericVideoPlayer {
             "-nostdin", "-an", "-sn", "-v", "error",
             "-hwaccel", "auto",
             "-threads", "0",
+            "-sws_flags", "fast_bilinear",
             "-ss", &format!("{:.3}", sec),
             "-i",
         ])
         .arg(&self.path);
 
         if self.play_width != self.original_width || self.play_height != self.original_height {
-            cmd.args(&["-vf", &format!("scale={}:{}", self.play_width, self.play_height)]);
+            cmd.args(&["-vf", &format!("scale={}:{}:flags=fast_bilinear", self.play_width, self.play_height)]);
         }
 
         cmd.args(&[
@@ -1508,6 +1514,44 @@ mod tests {
 
         let _ = fs::remove_file(mp4_path);
         let _ = fs::remove_dir(temp_dir);
+    }
+
+    #[test]
+    fn test_parse_probe_output_standard() {
+        let sample = "codec_name=h264\nwidth=1920\nheight=1080\nr_frame_rate=30/1\navg_frame_rate=30/1\nduration=10.000000\nnb_frames=300\nduration=10.000000\n";
+        let (codec, w, h, fps, frames, dur) = parse_probe_output(sample).unwrap();
+        assert_eq!(codec, "H.264 / AVC");
+        assert_eq!(w, 1920);
+        assert_eq!(h, 1080);
+        assert!((fps - 30.0).abs() < 0.001);
+        assert_eq!(frames, 300);
+        assert!((dur - 10.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_parse_probe_output_timescale_and_format_duration() {
+        // Simulates MP4 where stream duration and nb_frames are N/A, r_frame_rate is 90000/1, and format duration is 5.5s
+        let sample = "codec_name=hevc\nwidth=3840\nheight=2160\nr_frame_rate=90000/1\navg_frame_rate=60/1\nduration=N/A\nnb_frames=N/A\nduration=5.500000\n";
+        let (codec, w, h, fps, frames, dur) = parse_probe_output(sample).unwrap();
+        assert_eq!(codec, "H.265 / HEVC");
+        assert_eq!(w, 3840);
+        assert_eq!(h, 2160);
+        assert!((fps - 60.0).abs() < 0.001);
+        assert_eq!(frames, 330);
+        assert!((dur - 5.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_parse_probe_output_fallback_fps() {
+        // Simulates video where both framerates are unusual or zero
+        let sample = "codec_name=av01\nwidth=1280\nheight=720\nr_frame_rate=0/0\navg_frame_rate=0/0\nduration=4.000000\n";
+        let (codec, w, h, fps, frames, dur) = parse_probe_output(sample).unwrap();
+        assert_eq!(codec, "AV1");
+        assert_eq!(w, 1280);
+        assert_eq!(h, 720);
+        assert!((fps - 30.0).abs() < 0.001);
+        assert_eq!(frames, 120);
+        assert!((dur - 4.0).abs() < 0.001);
     }
 }
 
