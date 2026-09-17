@@ -107,6 +107,7 @@ pub struct HapLabApp {
     last_cursor_pos: Option<egui::Pos2>,
     last_cursor_activity: Instant,
     cursor_hidden: bool,
+    last_fullscreen_toggle: Instant,
     playback_start_instant: Instant,
     playback_start_frame: usize,
     current_frame: usize,
@@ -233,6 +234,7 @@ impl Default for HapLabApp {
             last_cursor_pos: None,
             last_cursor_activity: Instant::now(),
             cursor_hidden: false,
+            last_fullscreen_toggle: Instant::now(),
             playback_start_instant: Instant::now(),
             playback_start_frame: 0,
             current_frame: 0,
@@ -459,6 +461,10 @@ impl HapLabApp {
     }
 
     pub fn toggle_fullscreen(&mut self, ctx: &egui::Context) {
+        if self.last_fullscreen_toggle.elapsed().as_millis() < 350 {
+            return;
+        }
+        self.last_fullscreen_toggle = Instant::now();
         self.is_fullscreen = !self.is_fullscreen;
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
         self.last_cursor_activity = Instant::now();
@@ -869,6 +875,26 @@ impl HapLabApp {
     }
 }
 
+fn format_aspect_ratio(w: usize, h: usize) -> &'static str {
+    if h == 0 || w == 0 {
+        return "";
+    }
+    let ratio = w as f32 / h as f32;
+    if (ratio - 16.0 / 9.0).abs() < 0.05 {
+        "16:9"
+    } else if (ratio - 4.0 / 3.0).abs() < 0.05 {
+        "4:3"
+    } else if (ratio - 21.0 / 9.0).abs() < 0.05 || (ratio - 2.39).abs() < 0.05 {
+        "2.39:1"
+    } else if (ratio - 1.0).abs() < 0.05 {
+        "1:1"
+    } else if (ratio - 9.0 / 16.0).abs() < 0.05 {
+        "9:16"
+    } else {
+        ""
+    }
+}
+
 fn handle_window_edge_resize(ctx: &egui::Context, is_maximized: bool, is_fullscreen: bool) {
     if is_maximized || is_fullscreen {
         return;
@@ -909,14 +935,18 @@ impl eframe::App for HapLabApp {
         // Track cursor activity and movement for true fullscreen auto-hide
         let current_cursor = ctx.input(|i| i.pointer.latest_pos());
         let cursor_moved = match (current_cursor, self.last_cursor_pos) {
-            (Some(p1), Some(p2)) => p1.distance(p2) > 1.5,
+            (Some(p1), Some(p2)) => p1.distance(p2) > 2.0,
             (Some(_), None) => true,
             _ => false,
         };
-        let input_active = cursor_moved
-            || ctx.input(|i| i.pointer.any_down() || i.pointer.any_pressed() || !i.events.is_empty());
+        let user_input_active = cursor_moved
+            || ctx.input(|i| {
+                i.pointer.any_down()
+                    || i.pointer.any_pressed()
+                    || i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. }))
+            });
 
-        if input_active {
+        if user_input_active {
             if cursor_moved || ctx.input(|i| i.pointer.any_down() || i.pointer.any_pressed()) {
                 self.last_cursor_pos = current_cursor;
             }
@@ -1583,9 +1613,10 @@ impl eframe::App for HapLabApp {
         }
 
         // ===================================================================
-        // 1. TOP MENU BAR (DOCKED WHEN WINDOWED)
+        // 1. TOP STUDIO HEADER & BOTTOM TRANSPORT/METADATA BARS
+        // REVEALED IN WINDOWED MODE OR WHEN CURSOR MOVES IN FULLSCREEN
         // ===================================================================
-        if !is_fullscreen {
+        if !is_fullscreen || fullscreen_ui_visible {
             let menu_frame = if has_media {
                 egui::Frame::new()
                     .fill(Color32::from_rgba_premultiplied(12, 12, 12, 235))
@@ -1602,12 +1633,24 @@ impl eframe::App for HapLabApp {
                 .show_separator_line(false)
                 .frame(menu_frame)
                 .show(ui, |ui: &mut egui::Ui| {
-                    self.render_top_bar(ui, false, is_maximized);
+                    self.render_top_bar(ui, is_fullscreen, is_maximized);
                 });
 
-            // ===================================================================
-            // 2. BOTTOM TRANSPORT BAR (DOCKED WHEN WINDOWED)
-            // ===================================================================
+            // Thin metadata bar docked at the very bottom of the window
+            let metadata_frame = egui::Frame::new()
+                .fill(Color32::from_rgb(12, 12, 12))
+                .stroke(Stroke::new(1.0, Color32::from_rgb(26, 26, 26)))
+                .inner_margin(egui::Margin::symmetric(14, 4));
+
+            egui::Panel::bottom("bottom_metadata_panel")
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(metadata_frame)
+                .show(ui, |ui| {
+                    self.render_bottom_metadata(ui);
+                });
+
+            // Transport controls bar docked directly above the metadata row
             let transport_frame = if has_media {
                 egui::Frame::new()
                     .fill(Color32::from_rgba_premultiplied(12, 12, 12, 235))
@@ -1728,60 +1771,6 @@ impl eframe::App for HapLabApp {
                         );
                     }
 
-                    // Floating Stream Telemetry HUD (Top-Left of canvas, only when UI visible)
-                    if self.show_hud_overlay && self.has_video_loaded() && (!is_fullscreen || fullscreen_ui_visible) {
-                        let hud_y = if is_fullscreen { 50.0 } else { 12.0 };
-                        let hud_rect = Rect::from_min_size(
-                            video_rect.min + Vec2::new(12.0, hud_y),
-                            Vec2::new(260.0, 130.0),
-                        );
-                            ui.painter().rect_filled(
-                                hud_rect,
-                                CornerRadius::same(6),
-                                Color32::from_rgba_premultiplied(16, 16, 16, 230),
-                            );
-                            ui.painter().rect_stroke(
-                                hud_rect,
-                                CornerRadius::same(6),
-                                Stroke::new(1.0, colors::BORDER_SUBTLE),
-                                egui::StrokeKind::Inside,
-                            );
-
-                            let mut hud_ui = ui.new_child(
-                                egui::UiBuilder::new()
-                                    .max_rect(hud_rect.shrink(10.0))
-                                    .layout(egui::Layout::top_down(egui::Align::Min)),
-                            );
-
-                            if let Some(ref r) = self.reader {
-                                hud_ui.horizontal(|ui| {
-                                    ui.strong(RichText::new(r.format().name()).color(colors::ACCENT_CYAN).size(13.0));
-                                    ui.label(RichText::new(format!("{}x{}", r.width(), r.height())).color(colors::TEXT_PRIMARY).size(12.0));
-                                });
-                                hud_ui.add_space(4.0);
-                                let budget_ms = 1000.0 / r.fps().max(1.0);
-                                let decode_color = if self.last_decode_ms <= budget_ms {
-                                    colors::ACCENT_GREEN
-                                } else {
-                                    colors::ACCENT_RED
-                                };
-                                hud_ui.label(RichText::new(format!("Decode: {:.2} ms", self.last_decode_ms)).color(decode_color).size(11.5));
-
-                                if let Some(ref s) = self.stream_summary {
-                                    hud_ui.label(RichText::new(format!("Bitrate: {:.2} Mbps | Frame: {}", s.avg_bitrate_mbps, format_bytes(self.last_packet_bytes as u64))).color(colors::TEXT_MUTED).size(11.0));
-                                    hud_ui.label(RichText::new(format!("Texture: {}", if self.gpu_supports_bc { "Hardware Direct BC Upload" } else { "CPU Software Fallback" })).color(colors::TEXT_FAINT).size(10.5));
-                                }
-                            } else if let Some(ref p) = self.generic_player {
-                                hud_ui.horizontal(|ui| {
-                                    ui.strong(RichText::new(p.codec.to_uppercase()).color(colors::ACCENT_CYAN).size(13.0));
-                                    ui.label(RichText::new(format!("{}x{}", p.original_width, p.original_height)).color(colors::TEXT_PRIMARY).size(12.0));
-                                });
-                                hud_ui.add_space(4.0);
-                                hud_ui.label(RichText::new(format!("Playback FPS: {:.1} (Target: {:.0})", self.playback_fps, p.fps)).color(colors::ACCENT_GREEN).size(11.5));
-                                hud_ui.label(RichText::new("Decoder: Hardware Accelerated (Auto)").color(colors::ACCENT_CYAN).size(11.0));
-                                hud_ui.label(RichText::new(format!("Render Target: {}x{}", p.play_width, p.play_height)).color(colors::TEXT_FAINT).size(10.5));
-                            }
-                        }
                 } else if !self.is_loading_media {
                     // --- CLICK-ANYWHERE PLAYBACK AREA ---
                     let available_size = ui.available_size();
@@ -1834,49 +1823,6 @@ impl eframe::App for HapLabApp {
                 }
             });
 
-        // ===================================================================
-        // 4. FLOATING OVERLAYS IN FULLSCREEN (ONLY REVEALED WHEN CURSOR MOVES)
-        // ===================================================================
-        if is_fullscreen && fullscreen_ui_visible {
-            let screen_rect = ctx.viewport_rect();
-
-            // Floating Top Studio Bar
-            let top_frame = egui::Frame::new()
-                .fill(Color32::from_rgba_premultiplied(12, 12, 12, 230))
-                .stroke(Stroke::NONE)
-                .inner_margin(egui::Margin::symmetric(14, 6));
-
-            egui::Area::new(egui::Id::new("fs_top_bar"))
-                .order(egui::Order::Foreground)
-                .fixed_pos(screen_rect.min)
-                .show(&ctx, |ui| {
-                    ui.set_min_width(screen_rect.width());
-                    ui.set_max_width(screen_rect.width());
-                    top_frame.show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        self.render_top_bar(ui, true, is_maximized);
-                    });
-                });
-
-            // Floating Bottom Transport Bar
-            let bottom_frame = egui::Frame::new()
-                .fill(Color32::from_rgba_premultiplied(12, 12, 12, 230))
-                .stroke(Stroke::NONE)
-                .inner_margin(egui::Margin::symmetric(18, 8));
-
-            let bar_height = 84.0;
-            egui::Area::new(egui::Id::new("fs_bottom_bar"))
-                .order(egui::Order::Foreground)
-                .fixed_pos(egui::pos2(screen_rect.min.x, screen_rect.max.y - bar_height))
-                .show(&ctx, |ui| {
-                    ui.set_min_width(screen_rect.width());
-                    ui.set_max_width(screen_rect.width());
-                    bottom_frame.show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        self.render_bottom_transport(ui, &ctx);
-                    });
-                });
-        }
         // ===================================================================
         // 4. FLOATING STUDIO WINDOWS / DIALOGS
         // ===================================================================
@@ -2220,31 +2166,10 @@ impl HapLabApp {
                             self.show_transcode_window = !self.show_transcode_window;
                         }
 
-                        ui.add_space(12.0);
-
-                        // Active media status badges
-                        if let Some(ref reader) = self.reader {
-                            render_badge(ui, reader.format().name(), Color32::TRANSPARENT, colors::ACCENT_CYAN);
-                            render_badge(ui, &format!("{}x{}", reader.width(), reader.height()), Color32::TRANSPARENT, colors::TEXT_PRIMARY);
-                            render_badge(ui, &format!("{:.0} FPS", reader.fps()), Color32::TRANSPARENT, colors::TEXT_MUTED);
-                        } else if let Some(ref player) = self.generic_player {
-                            render_badge(ui, &player.codec.to_uppercase(), Color32::TRANSPARENT, colors::ACCENT_CYAN);
-                            render_badge(ui, &format!("{}x{}", player.original_width, player.original_height), Color32::TRANSPARENT, colors::TEXT_PRIMARY);
-                            render_badge(ui, &format!("{:.0} FPS", player.fps), Color32::TRANSPARENT, colors::TEXT_MUTED);
-                        } else if let Some(ref img) = self.still_image_info {
-                            render_badge(ui, "Still Image", Color32::TRANSPARENT, colors::ACCENT_CYAN);
-                            render_badge(ui, &format!("{}x{}", img.width, img.height), Color32::TRANSPARENT, colors::TEXT_PRIMARY);
-                        } else if let Some(ref codec) = self.enc_detected_codec {
-                            render_badge(ui, codec, Color32::TRANSPARENT, colors::ACCENT_CYAN);
-                            if self.enc_detected_w > 0 {
-                                render_badge(ui, &format!("{}x{}", self.enc_detected_w, self.enc_detected_h), Color32::TRANSPARENT, colors::TEXT_PRIMARY);
-                            }
-                        }
-
-                        // Draggable middle spacer for moving window or toggling maximize
+                                                // Draggable middle spacer for moving window or toggling maximize (Clean, no badges or details)
                         let remaining_space = ui.available_size();
                         if remaining_space.x > 8.0 {
-                            let (drag_rect, drag_resp) = ui.allocate_exact_size(remaining_space, egui::Sense::click_and_drag());
+                            let (_drag_rect, drag_resp) = ui.allocate_exact_size(remaining_space, egui::Sense::click_and_drag());
                             if drag_resp.drag_started_by(egui::PointerButton::Primary) {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                             }
@@ -2255,29 +2180,166 @@ impl HapLabApp {
                                     ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
                                 }
                             }
-
-                            // Centered media title in top bar if file is open
-                            let title_text = if let Some(ref p) = self.mov_path {
-                                p.file_name().map(|f| f.to_string_lossy().to_string())
-                            } else if let Some(ref p) = self.enc_input_path {
-                                p.file_name().map(|f| f.to_string_lossy().to_string())
-                            } else {
-                                None
-                            };
-
-                            if let Some(name) = title_text {
-                                let font_id = egui::FontId::proportional(12.0);
-                                let galley = ui.painter().layout_no_wrap(name, font_id, colors::TEXT_MUTED);
-                                if galley.size().x < drag_rect.width() - 20.0 {
-                                    let center_x = drag_rect.center().x - galley.size().x * 0.5;
-                                    let center_y = drag_rect.center().y - galley.size().y * 0.5;
-                                    ui.painter().galley(egui::pos2(center_x, center_y), galley, colors::TEXT_MUTED);
-                                }
-                            }
                         }
                     });
                 });
+    }
 
+
+    /// Renders a thin, detailed metadata strip at the bottom of the window.
+    fn render_bottom_metadata(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(7.0, 0.0);
+
+            if let Some((ref msg, time, color)) = self.toast {
+                if time.elapsed().as_secs_f32() < 4.0 {
+                    ui.label(RichText::new(msg).color(color).strong().size(11.5));
+                    ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+                }
+            }
+
+            if let Some(ref reader) = self.reader {
+                // Filename
+                if let Some(ref p) = self.mov_path {
+                    if let Some(name) = p.file_name() {
+                        ui.strong(RichText::new(name.to_string_lossy()).color(colors::TEXT_PRIMARY).size(11.5));
+                        ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+                    }
+                }
+
+                // Codec format
+                ui.label(RichText::new(reader.format().name()).color(colors::ACCENT_CYAN).strong().size(11.5));
+                ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+
+                // Resolution & Aspect Ratio
+                let ar = format_aspect_ratio(reader.width() as usize, reader.height() as usize);
+                let res_text = if ar.is_empty() {
+                    format!("{}x{}", reader.width(), reader.height())
+                } else {
+                    format!("{}x{} ({})", reader.width(), reader.height(), ar)
+                };
+                ui.label(RichText::new(res_text).color(colors::TEXT_PRIMARY).size(11.5));
+                ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+
+                // FPS
+                ui.label(RichText::new(format!("{:.2} FPS", reader.fps())).color(colors::TEXT_MUTED).size(11.5));
+                ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+
+                // Frames & Duration
+                let count = reader.frame_count();
+                let tc = format_smpte_timecode(count.saturating_sub(1), reader.fps());
+                ui.label(RichText::new(format!("{} frames ({})", count, tc)).color(colors::TEXT_MUTED).size(11.5));
+
+                // Chunks
+                if let Some(ref s) = self.stream_summary {
+                    if s.chunk_count > 1 {
+                        ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+                        ui.label(RichText::new(format!("{} Chunks", s.chunk_count)).color(colors::TEXT_MUTED).size(11.0));
+                    }
+                }
+
+                // Bitrate & packet
+                if let Some(ref s) = self.stream_summary {
+                    ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+                    ui.label(RichText::new(format!("{:.1} Mbps | {}", s.avg_bitrate_mbps, format_bytes(self.last_packet_bytes as u64))).color(colors::TEXT_MUTED).size(11.0));
+                }
+
+                // Decode time (goes red if slower than required frame budget)
+                let frame_budget_ms = if reader.fps() > 0.0 { 1000.0 / reader.fps() } else { 33.33 };
+                let decode_color = if self.last_decode_ms > frame_budget_ms {
+                    colors::ACCENT_RED
+                } else {
+                    colors::ACCENT_GREEN
+                };
+                ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+                ui.label(RichText::new(format!("Decode: {:.2} ms", self.last_decode_ms)).color(decode_color).size(11.5));
+
+                // Right-aligned hardware status
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if self.gpu_supports_bc {
+                        ui.label(RichText::new("Direct VRAM BC Upload").color(colors::ACCENT_GREEN).size(11.0));
+                    } else {
+                        ui.label(RichText::new("CPU Software Fallback").color(colors::TEXT_FAINT).size(11.0));
+                    }
+                });
+            } else if let Some(ref player) = self.generic_player {
+                if let Some(ref p) = self.enc_input_path {
+                    if let Some(name) = p.file_name() {
+                        ui.strong(RichText::new(name.to_string_lossy()).color(colors::TEXT_PRIMARY).size(11.5));
+                        ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+                    }
+                }
+
+                ui.label(RichText::new(player.codec.to_uppercase()).color(colors::ACCENT_CYAN).strong().size(11.5));
+                ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+
+                let ar = format_aspect_ratio(player.original_width, player.original_height);
+                let res_text = if ar.is_empty() {
+                    format!("{}x{}", player.original_width, player.original_height)
+                } else {
+                    format!("{}x{} ({})", player.original_width, player.original_height, ar)
+                };
+                ui.label(RichText::new(res_text).color(colors::TEXT_PRIMARY).size(11.5));
+                ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+
+                ui.label(RichText::new(format!("{:.1} FPS", player.fps)).color(colors::TEXT_MUTED).size(11.5));
+                ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+
+                let count = player.total_frames;
+                let tc = format_smpte_timecode(count.saturating_sub(1), player.fps);
+                ui.label(RichText::new(format!("{} frames ({})", count, tc)).color(colors::TEXT_MUTED).size(11.5));
+                ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+
+                ui.label(RichText::new(format!("Playback: {:.1} FPS", self.playback_fps)).color(colors::ACCENT_GREEN).size(11.5));
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new("Hardware Accelerated Decoder").color(colors::ACCENT_CYAN).size(11.0));
+                });
+            } else if let Some(ref img) = self.still_image_info {
+                if let Some(name) = img.path.file_name() {
+                    ui.strong(RichText::new(name.to_string_lossy()).color(colors::TEXT_PRIMARY).size(11.5));
+                    ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+                }
+                ui.label(RichText::new("Still Image").color(colors::ACCENT_CYAN).strong().size(11.5));
+                ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+
+                let ar = format_aspect_ratio(img.width, img.height);
+                let res_text = if ar.is_empty() {
+                    format!("{}x{}", img.width, img.height)
+                } else {
+                    format!("{}x{} ({})", img.width, img.height, ar)
+                };
+                ui.label(RichText::new(res_text).color(colors::TEXT_PRIMARY).size(11.5));
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new("Ready to convert or export").color(colors::TEXT_FAINT).size(11.0));
+                });
+            } else if let Some(ref p) = self.enc_input_path {
+                if let Some(name) = p.file_name() {
+                    ui.strong(RichText::new(name.to_string_lossy()).color(colors::TEXT_PRIMARY).size(11.5));
+                    ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+                }
+                if let Some(ref codec) = self.enc_detected_codec {
+                    ui.label(RichText::new(codec).color(colors::ACCENT_CYAN).strong().size(11.5));
+                    ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+                }
+                if self.enc_detected_w > 0 {
+                    ui.label(RichText::new(format!("{}x{}", self.enc_detected_w, self.enc_detected_h)).color(colors::TEXT_PRIMARY).size(11.5));
+                    ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+                }
+                if self.enc_fps > 0.0 {
+                    ui.label(RichText::new(format!("{:.1} FPS", self.enc_fps)).color(colors::TEXT_MUTED).size(11.5));
+                }
+            } else {
+                ui.label(RichText::new("No media loaded").color(colors::TEXT_MUTED).size(11.5));
+                ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+                ui.label(RichText::new("Drag & drop a video or image, or press Ctrl+O").color(colors::TEXT_FAINT).size(11.0));
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(format!("GPU: {} ({})", self.gpu_adapter_name, self.gpu_backend_name)).color(colors::TEXT_FAINT).size(10.5));
+                });
+            }
+        });
     }
 
     fn render_bottom_transport(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
