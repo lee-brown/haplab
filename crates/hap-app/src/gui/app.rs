@@ -104,6 +104,9 @@ pub struct HapLabApp {
     pending_seek_frame: Option<usize>,
     was_playing_before_scrub: bool,
     is_fullscreen: bool,
+    last_cursor_pos: Option<egui::Pos2>,
+    last_cursor_activity: Instant,
+    cursor_hidden: bool,
     playback_start_instant: Instant,
     playback_start_frame: usize,
     current_frame: usize,
@@ -227,6 +230,9 @@ impl Default for HapLabApp {
             pending_seek_frame: None,
             was_playing_before_scrub: false,
             is_fullscreen: false,
+            last_cursor_pos: None,
+            last_cursor_activity: Instant::now(),
+            cursor_hidden: false,
             playback_start_instant: Instant::now(),
             playback_start_frame: 0,
             current_frame: 0,
@@ -455,6 +461,11 @@ impl HapLabApp {
     pub fn toggle_fullscreen(&mut self, ctx: &egui::Context) {
         self.is_fullscreen = !self.is_fullscreen;
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
+        self.last_cursor_activity = Instant::now();
+        if !self.is_fullscreen && self.cursor_hidden {
+            self.cursor_hidden = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(true));
+        }
     }
 
     /// Asynchronously opens a media file or directory without freezing the UI thread.
@@ -858,9 +869,94 @@ impl HapLabApp {
     }
 }
 
+fn handle_window_edge_resize(ctx: &egui::Context, is_maximized: bool, is_fullscreen: bool) {
+    if is_maximized || is_fullscreen {
+        return;
+    }
+    let screen_rect = ctx.viewport_rect();
+    if let Some(pos) = ctx.input(|i| i.pointer.latest_pos()) {
+        let border = 6.0;
+        let on_left = pos.x >= screen_rect.min.x && pos.x <= screen_rect.min.x + border;
+        let on_right = pos.x <= screen_rect.max.x && pos.x >= screen_rect.max.x - border;
+        let on_top = pos.y >= screen_rect.min.y && pos.y <= screen_rect.min.y + border;
+        let on_bottom = pos.y <= screen_rect.max.y && pos.y >= screen_rect.max.y - border;
+
+        let resize_dir = match (on_left, on_right, on_top, on_bottom) {
+            (true, _, true, _) => Some((egui::viewport::ResizeDirection::NorthWest, egui::CursorIcon::ResizeNorthWest)),
+            (_, true, true, _) => Some((egui::viewport::ResizeDirection::NorthEast, egui::CursorIcon::ResizeNorthEast)),
+            (true, _, _, true) => Some((egui::viewport::ResizeDirection::SouthWest, egui::CursorIcon::ResizeSouthWest)),
+            (_, true, _, true) => Some((egui::viewport::ResizeDirection::SouthEast, egui::CursorIcon::ResizeSouthEast)),
+            (true, _, _, _) => Some((egui::viewport::ResizeDirection::West, egui::CursorIcon::ResizeWest)),
+            (_, true, _, _) => Some((egui::viewport::ResizeDirection::East, egui::CursorIcon::ResizeEast)),
+            (_, _, true, _) => Some((egui::viewport::ResizeDirection::North, egui::CursorIcon::ResizeNorth)),
+            (_, _, _, true) => Some((egui::viewport::ResizeDirection::South, egui::CursorIcon::ResizeSouth)),
+            _ => None,
+        };
+
+        if let Some((dir, cursor)) = resize_dir {
+            ctx.set_cursor_icon(cursor);
+            if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+            }
+        }
+    }
+}
+
 impl eframe::App for HapLabApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         apply_studio_theme(ctx);
+
+        // Track cursor activity and movement for true fullscreen auto-hide
+        let current_cursor = ctx.input(|i| i.pointer.latest_pos());
+        let cursor_moved = match (current_cursor, self.last_cursor_pos) {
+            (Some(p1), Some(p2)) => p1.distance(p2) > 1.5,
+            (Some(_), None) => true,
+            _ => false,
+        };
+        let input_active = cursor_moved
+            || ctx.input(|i| i.pointer.any_down() || i.pointer.any_pressed() || !i.events.is_empty());
+
+        if input_active {
+            if cursor_moved || ctx.input(|i| i.pointer.any_down() || i.pointer.any_pressed()) {
+                self.last_cursor_pos = current_cursor;
+            }
+            self.last_cursor_activity = Instant::now();
+            if self.is_fullscreen && self.cursor_hidden {
+                self.cursor_hidden = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(true));
+            }
+        }
+
+        let fullscreen_ui_visible = !self.is_fullscreen || self.last_cursor_activity.elapsed().as_secs_f32() < 2.5;
+
+        if self.is_fullscreen {
+            if !fullscreen_ui_visible {
+                if !self.cursor_hidden {
+                    self.cursor_hidden = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(false));
+                }
+            } else {
+                let elapsed = self.last_cursor_activity.elapsed().as_secs_f32();
+                let remaining = (2.5 - elapsed).max(0.02);
+                ctx.request_repaint_after_secs(remaining);
+            }
+        } else if self.cursor_hidden {
+            self.cursor_hidden = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(true));
+        }
+
+        let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+        handle_window_edge_resize(ctx, is_maximized, self.is_fullscreen);
+
+        if !self.is_fullscreen && !is_maximized {
+            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("window_border")));
+            painter.rect_stroke(
+                ctx.viewport_rect(),
+                0.0,
+                Stroke::new(1.0, Color32::from_rgb(38, 38, 38)),
+                egui::StrokeKind::Inside,
+            );
+        }
 
         // 1. Drag & Drop File Handling
         let dropped_file_path = ctx.input_mut(|i| {
@@ -1463,6 +1559,9 @@ impl eframe::App for HapLabApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let has_media = self.reader.is_some() || self.generic_player.is_some() || self.preview_texture.is_some() || self.still_image_info.is_some();
+        let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+        let is_fullscreen = self.is_fullscreen;
+        let fullscreen_ui_visible = !is_fullscreen || self.last_cursor_activity.elapsed().as_secs_f32() < 2.5;
 
         // 0. FULL-WINDOW AMBIENT GLOW (When no media is loaded)
         // Seamlessly blankets the entire window background with zero borders or outlines.
@@ -1484,24 +1583,317 @@ impl eframe::App for HapLabApp {
         }
 
         // ===================================================================
-        // 1. TOP MENU BAR & QUICK ACTION BUTTONS
+        // 1. TOP MENU BAR (DOCKED WHEN WINDOWED)
         // ===================================================================
-        let menu_frame = if has_media {
+        if !is_fullscreen {
+            let menu_frame = if has_media {
+                egui::Frame::new()
+                    .fill(Color32::from_rgba_premultiplied(12, 12, 12, 235))
+                    .stroke(Stroke::NONE)
+                    .inner_margin(egui::Margin::symmetric(14, 6))
+            } else {
+                egui::Frame::new()
+                    .fill(Color32::from_rgba_premultiplied(12, 12, 12, 160))
+                    .stroke(Stroke::NONE)
+                    .inner_margin(egui::Margin::symmetric(14, 7))
+            };
+
+            egui::Panel::top("top_menu_panel")
+                .show_separator_line(false)
+                .frame(menu_frame)
+                .show(ui, |ui: &mut egui::Ui| {
+                    self.render_top_bar(ui, false, is_maximized);
+                });
+
+            // ===================================================================
+            // 2. BOTTOM TRANSPORT BAR (DOCKED WHEN WINDOWED)
+            // ===================================================================
+            let transport_frame = if has_media {
+                egui::Frame::new()
+                    .fill(Color32::from_rgba_premultiplied(12, 12, 12, 235))
+                    .stroke(Stroke::NONE)
+                    .inner_margin(egui::Margin::symmetric(18, 8))
+            } else {
+                egui::Frame::new()
+                    .fill(Color32::from_rgba_premultiplied(12, 12, 12, 160))
+                    .stroke(Stroke::NONE)
+                    .inner_margin(egui::Margin::symmetric(18, 8))
+            };
+
+            egui::Panel::bottom("bottom_transport_panel")
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(transport_frame)
+                .show(ui, |ui| {
+                    self.render_bottom_transport(ui, &ctx);
+                });
+        }
+
+        // ===================================================================
+        // 3. CENTRAL MAIN CANVAS (PLAYER VIEWPORT)
+        // OCCUPIES REMAINING VIEWPORT SPACE BETWEEN TOP AND BOTTOM PANELS
+        // ===================================================================
+        let canvas_frame = if is_fullscreen {
             egui::Frame::new()
-                .fill(Color32::from_rgba_premultiplied(12, 12, 12, 235))
+                .fill(Color32::BLACK)
                 .stroke(Stroke::NONE)
-                .inner_margin(egui::Margin::symmetric(14, 6))
+                .inner_margin(egui::Margin::ZERO)
+        } else if has_media {
+            egui::Frame::new()
+                .fill(colors::BG_APP)
+                .stroke(Stroke::NONE)
+                .inner_margin(egui::Margin::same(6))
         } else {
             egui::Frame::new()
-                .fill(Color32::from_rgba_premultiplied(12, 12, 12, 160))
+                .fill(Color32::TRANSPARENT)
                 .stroke(Stroke::NONE)
-                .inner_margin(egui::Margin::symmetric(14, 7))
+                .inner_margin(egui::Margin::ZERO)
         };
 
-        egui::Panel::top("top_menu_panel")
-            .show_separator_line(false)
-            .frame(menu_frame)
+        egui::CentralPanel::default()
+            .frame(canvas_frame)
             .show(ui, |ui: &mut egui::Ui| {
+                let has_media = self.reader.is_some() || self.generic_player.is_some() || self.preview_texture.is_some() || self.still_image_info.is_some();
+
+                if has_media {
+                    let available_size = ui.available_size();
+                    let (content_w, content_h) = if let Some(ref r) = self.reader {
+                        (r.width() as f32, r.height() as f32)
+                    } else if let Some(ref p) = self.generic_player {
+                        (p.original_width as f32, p.original_height as f32)
+                    } else if let Some(ref img) = self.still_image_info {
+                        (img.width as f32, img.height as f32)
+                    } else if self.enc_detected_w > 0 && self.enc_detected_h > 0 {
+                        (self.enc_detected_w as f32, self.enc_detected_h as f32)
+                    } else {
+                        (16.0, 9.0)
+                    };
+
+                    // Derive aspect ratio strictly from active texture if loaded,
+                    // guaranteeing 100% distortion-free fit without any stretching.
+                    let aspect = if let Some(ref tex) = self.preview_texture {
+                        let sz = tex.size_vec2();
+                        if sz.y > 0.0 {
+                            sz.x / sz.y
+                        } else {
+                            content_w / content_h.max(1.0)
+                        }
+                    } else {
+                        content_w / content_h.max(1.0)
+                    };
+
+                    let aspect = aspect.max(0.01);
+                    let (final_w, final_h) = if available_size.x / aspect <= available_size.y {
+                        (available_size.x, available_size.x / aspect)
+                    } else {
+                        (available_size.y * aspect, available_size.y)
+                    };
+
+                    let y_padding = ((available_size.y - final_h) * 0.5).max(0.0);
+                    let x_padding = ((available_size.x - final_w) * 0.5).max(0.0);
+
+                    // Allocate full available area for interaction (double-click anywhere in video/letterbox toggles fullscreen)
+                    let (canvas_rect, canvas_resp) = ui.allocate_exact_size(available_size, egui::Sense::click());
+                    if canvas_resp.double_clicked() {
+                        self.toggle_fullscreen(&ctx);
+                    }
+
+                    let video_rect = Rect::from_min_size(
+                        egui::pos2(canvas_rect.min.x + x_padding, canvas_rect.min.y + y_padding),
+                        Vec2::new(final_w, final_h),
+                    );
+
+                    // Paint Canvas Background
+                    if !is_fullscreen {
+                        match self.bg_mode {
+                            BackgroundViewMode::Checkerboard => {
+                                paint_transparency_checkerboard(ui.painter(), video_rect);
+                            }
+                            BackgroundViewMode::Dark => {
+                                ui.painter().rect_filled(video_rect, 0, Color32::from_rgb(12, 12, 12));
+                            }
+                            BackgroundViewMode::Light => {
+                                ui.painter().rect_filled(video_rect, 0, Color32::from_rgb(180, 185, 195));
+                            }
+                        }
+                    }
+
+                    // Paint Media Frame
+                    if let Some(ref texture) = self.preview_texture {
+                        ui.painter().image(
+                            texture.id(),
+                            video_rect,
+                            Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                            Color32::WHITE,
+                        );
+                    }
+
+                    // Floating Stream Telemetry HUD (Top-Left of canvas, only when UI visible)
+                    if self.show_hud_overlay && self.has_video_loaded() && (!is_fullscreen || fullscreen_ui_visible) {
+                        let hud_y = if is_fullscreen { 50.0 } else { 12.0 };
+                        let hud_rect = Rect::from_min_size(
+                            video_rect.min + Vec2::new(12.0, hud_y),
+                            Vec2::new(260.0, 130.0),
+                        );
+                            ui.painter().rect_filled(
+                                hud_rect,
+                                CornerRadius::same(6),
+                                Color32::from_rgba_premultiplied(16, 16, 16, 230),
+                            );
+                            ui.painter().rect_stroke(
+                                hud_rect,
+                                CornerRadius::same(6),
+                                Stroke::new(1.0, colors::BORDER_SUBTLE),
+                                egui::StrokeKind::Inside,
+                            );
+
+                            let mut hud_ui = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .max_rect(hud_rect.shrink(10.0))
+                                    .layout(egui::Layout::top_down(egui::Align::Min)),
+                            );
+
+                            if let Some(ref r) = self.reader {
+                                hud_ui.horizontal(|ui| {
+                                    ui.strong(RichText::new(r.format().name()).color(colors::ACCENT_CYAN).size(13.0));
+                                    ui.label(RichText::new(format!("{}x{}", r.width(), r.height())).color(colors::TEXT_PRIMARY).size(12.0));
+                                });
+                                hud_ui.add_space(4.0);
+                                let budget_ms = 1000.0 / r.fps().max(1.0);
+                                let decode_color = if self.last_decode_ms <= budget_ms {
+                                    colors::ACCENT_GREEN
+                                } else {
+                                    colors::ACCENT_RED
+                                };
+                                hud_ui.label(RichText::new(format!("Decode: {:.2} ms", self.last_decode_ms)).color(decode_color).size(11.5));
+
+                                if let Some(ref s) = self.stream_summary {
+                                    hud_ui.label(RichText::new(format!("Bitrate: {:.2} Mbps | Frame: {}", s.avg_bitrate_mbps, format_bytes(self.last_packet_bytes as u64))).color(colors::TEXT_MUTED).size(11.0));
+                                    hud_ui.label(RichText::new(format!("Texture: {}", if self.gpu_supports_bc { "Hardware Direct BC Upload" } else { "CPU Software Fallback" })).color(colors::TEXT_FAINT).size(10.5));
+                                }
+                            } else if let Some(ref p) = self.generic_player {
+                                hud_ui.horizontal(|ui| {
+                                    ui.strong(RichText::new(p.codec.to_uppercase()).color(colors::ACCENT_CYAN).size(13.0));
+                                    ui.label(RichText::new(format!("{}x{}", p.original_width, p.original_height)).color(colors::TEXT_PRIMARY).size(12.0));
+                                });
+                                hud_ui.add_space(4.0);
+                                hud_ui.label(RichText::new(format!("Playback FPS: {:.1} (Target: {:.0})", self.playback_fps, p.fps)).color(colors::ACCENT_GREEN).size(11.5));
+                                hud_ui.label(RichText::new("Decoder: Hardware Accelerated (Auto)").color(colors::ACCENT_CYAN).size(11.0));
+                                hud_ui.label(RichText::new(format!("Render Target: {}x{}", p.play_width, p.play_height)).color(colors::TEXT_FAINT).size(10.5));
+                            }
+                        }
+                } else if !self.is_loading_media {
+                    // --- CLICK-ANYWHERE PLAYBACK AREA ---
+                    let available_size = ui.available_size();
+                    let (_canvas_rect, resp) = ui.allocate_exact_size(available_size, egui::Sense::click());
+
+                    if resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+
+                    if resp.clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("All Media", &["mov", "mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts", "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
+                            .add_filter("QuickTime HAP Videos (*.mov)", &["mov"])
+                            .add_filter("Video Files (*.mp4, *.mkv, *.webm, *.mxf, *.avi)", &["mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts"])
+                            .add_filter("Still Images (*.png, *.jpg, *.tiff, *.webp, *.bmp)", &["png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
+                            .pick_file()
+                        {
+                            self.open_media_file(path, &ctx);
+                        }
+                    }
+                }
+
+                if self.is_loading_media {
+                    let center = ui.max_rect().center();
+                    let loading_rect = Rect::from_center_size(center, Vec2::new(260.0, 52.0));
+                    ui.painter().rect_filled(
+                        loading_rect,
+                        CornerRadius::same(10),
+                        Color32::from_rgba_premultiplied(16, 16, 16, 240),
+                    );
+                    ui.painter().rect_stroke(
+                        loading_rect,
+                        CornerRadius::same(10),
+                        Stroke::new(1.0, colors::BORDER_SUBTLE),
+                        egui::StrokeKind::Inside,
+                    );
+                    let mut loading_ui = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(loading_rect.shrink(10.0))
+                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                    );
+                    loading_ui.spinner();
+                    loading_ui.add_space(8.0);
+                    loading_ui.label(
+                        RichText::new(format!("Loading {}...", self.loading_filename))
+                            .size(13.0)
+                            .color(colors::TEXT_PRIMARY)
+                            .strong(),
+                    );
+                }
+            });
+
+        // ===================================================================
+        // 4. FLOATING OVERLAYS IN FULLSCREEN (ONLY REVEALED WHEN CURSOR MOVES)
+        // ===================================================================
+        if is_fullscreen && fullscreen_ui_visible {
+            let screen_rect = ctx.viewport_rect();
+
+            // Floating Top Studio Bar
+            let top_frame = egui::Frame::new()
+                .fill(Color32::from_rgba_premultiplied(12, 12, 12, 230))
+                .stroke(Stroke::NONE)
+                .inner_margin(egui::Margin::symmetric(14, 6));
+
+            egui::Area::new(egui::Id::new("fs_top_bar"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(screen_rect.min)
+                .show(&ctx, |ui| {
+                    ui.set_min_width(screen_rect.width());
+                    ui.set_max_width(screen_rect.width());
+                    top_frame.show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        self.render_top_bar(ui, true, is_maximized);
+                    });
+                });
+
+            // Floating Bottom Transport Bar
+            let bottom_frame = egui::Frame::new()
+                .fill(Color32::from_rgba_premultiplied(12, 12, 12, 230))
+                .stroke(Stroke::NONE)
+                .inner_margin(egui::Margin::symmetric(18, 8));
+
+            let bar_height = 84.0;
+            egui::Area::new(egui::Id::new("fs_bottom_bar"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(egui::pos2(screen_rect.min.x, screen_rect.max.y - bar_height))
+                .show(&ctx, |ui| {
+                    ui.set_min_width(screen_rect.width());
+                    ui.set_max_width(screen_rect.width());
+                    bottom_frame.show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        self.render_bottom_transport(ui, &ctx);
+                    });
+                });
+        }
+        // ===================================================================
+        // 4. FLOATING STUDIO WINDOWS / DIALOGS
+        // ===================================================================
+        self.show_transcode_dialog(&ctx);
+        self.show_benchmark_dialog(&ctx);
+        self.show_audit_dialog(&ctx);
+        self.show_diagnostics_dialog(&ctx);
+        self.show_shortcuts_dialog(&ctx);
+        self.show_about_dialog(&ctx);
+    }
+}
+
+impl HapLabApp {
+    fn render_top_bar(&mut self, ui: &mut egui::Ui, is_fullscreen: bool, is_maximized: bool) {
+        let ctx = ui.ctx().clone();
+        let has_media = self.reader.is_some() || self.enc_input_path.is_some() || self.generic_player.is_some() || self.still_image_info.is_some() || self.preview_texture.is_some();
+
                 egui::MenuBar::new().ui(ui, |ui| {
                     // --- BRANDING ---
                     if let Some(ref icon) = self.app_icon_texture {
@@ -1512,9 +1904,22 @@ impl eframe::App for HapLabApp {
                             Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                             Color32::WHITE,
                         );
-                        ui.add_space(2.0);
+                        ui.add_space(3.0);
                     }
-                    ui.label(RichText::new("HapLab").strong().size(14.0).color(Color32::WHITE));
+                    let title_resp = ui.add(
+                        egui::Label::new(RichText::new("HapLab").strong().size(14.0).color(Color32::WHITE))
+                            .sense(egui::Sense::click_and_drag()),
+                    );
+                    if title_resp.drag_started_by(egui::PointerButton::Primary) {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    }
+                    if title_resp.double_clicked() {
+                        if is_fullscreen {
+                            self.toggle_fullscreen(&ctx);
+                        } else {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
+                        }
+                    }
                     ui.add_space(14.0);
 
                     // --- MENU: FILE ---
@@ -1663,6 +2068,13 @@ impl eframe::App for HapLabApp {
 
                         ui.separator();
                         ui.checkbox(&mut self.show_ambient_glow, "Ambient Light Glow");
+
+                        ui.separator();
+                        let fs_label = if self.is_fullscreen { "Exit Fullscreen (F11 / Esc)" } else { "Enter Fullscreen (F11)" };
+                        if ui.button(fs_label).clicked() {
+                            self.toggle_fullscreen(&ctx);
+                            ui.close();
+                        }
                     });
 
                     // --- MENU: TOOLS ---
@@ -1701,8 +2113,76 @@ impl eframe::App for HapLabApp {
                         }
                     });
 
-                    // --- RIGHT-ALIGNED STATUS & QUICK BUTTONS ---
+                    // --- RIGHT-ALIGNED STATUS, QUICK BUTTONS & WINDOW CONTROLS ---
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui: &mut egui::Ui| {
+                        // 1. CUSTOM WINDOW CONTROLS (Far Right of Title Bar)
+                        // Close button (turns crimson red on hover)
+                        let close_size = Vec2::new(36.0, 24.0);
+                        let (close_rect, close_resp) = ui.allocate_exact_size(close_size, egui::Sense::click());
+                        if close_resp.hovered() {
+                            ui.painter().rect_filled(close_rect, CornerRadius::same(3), colors::ACCENT_RED);
+                        }
+                        let close_color = if close_resp.hovered() { Color32::WHITE } else { colors::TEXT_MUTED };
+                        let c_pos = close_rect.center();
+                        ui.painter().line_segment([c_pos + Vec2::new(-4.0, -4.0), c_pos + Vec2::new(4.0, 4.0)], Stroke::new(1.3, close_color));
+                        ui.painter().line_segment([c_pos + Vec2::new(-4.0, 4.0), c_pos + Vec2::new(4.0, -4.0)], Stroke::new(1.3, close_color));
+                        let close_resp = close_resp.on_hover_text("Close (Alt+F4)");
+                        if close_resp.clicked() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+
+                        // Maximize / Restore / Exit Fullscreen button
+                        let max_size = Vec2::new(32.0, 24.0);
+                        let (max_rect, max_resp) = ui.allocate_exact_size(max_size, egui::Sense::click());
+                        if max_resp.hovered() {
+                            ui.painter().rect_filled(max_rect, CornerRadius::same(3), Color32::from_rgba_premultiplied(255, 255, 255, 22));
+                        }
+                        let max_color = if max_resp.hovered() { Color32::WHITE } else { colors::TEXT_MUTED };
+                        let m_pos = max_rect.center();
+                        if is_fullscreen || is_maximized {
+                            // Restore icon (two overlapping squares)
+                            let r1 = Rect::from_center_size(m_pos + Vec2::new(2.0, -2.0), Vec2::new(7.5, 7.5));
+                            ui.painter().rect_stroke(r1, 0.0, Stroke::new(1.1, max_color), egui::StrokeKind::Inside);
+                            let r2 = Rect::from_center_size(m_pos + Vec2::new(-2.0, 2.0), Vec2::new(7.5, 7.5));
+                            ui.painter().rect_filled(r2, 0.0, Color32::from_rgb(16, 16, 16));
+                            ui.painter().rect_stroke(r2, 0.0, Stroke::new(1.1, max_color), egui::StrokeKind::Inside);
+                        } else {
+                            // Maximize icon (single square)
+                            let r = Rect::from_center_size(m_pos, Vec2::new(9.0, 9.0));
+                            ui.painter().rect_stroke(r, 0.0, Stroke::new(1.2, max_color), egui::StrokeKind::Inside);
+                        }
+                        let max_tooltip = if is_fullscreen {
+                            "Exit Fullscreen (Esc / F11)"
+                        } else if is_maximized {
+                            "Restore Window"
+                        } else {
+                            "Maximize Window"
+                        };
+                        let max_resp = max_resp.on_hover_text(max_tooltip);
+                        if max_resp.clicked() {
+                            if is_fullscreen {
+                                self.toggle_fullscreen(&ctx);
+                            } else {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
+                            }
+                        }
+
+                        // Minimize button
+                        let min_size = Vec2::new(32.0, 24.0);
+                        let (min_rect, min_resp) = ui.allocate_exact_size(min_size, egui::Sense::click());
+                        if min_resp.hovered() {
+                            ui.painter().rect_filled(min_rect, CornerRadius::same(3), Color32::from_rgba_premultiplied(255, 255, 255, 22));
+                        }
+                        let min_color = if min_resp.hovered() { Color32::WHITE } else { colors::TEXT_MUTED };
+                        let min_pos = min_rect.center();
+                        ui.painter().line_segment([min_pos + Vec2::new(-4.5, 3.5), min_pos + Vec2::new(4.5, 3.5)], Stroke::new(1.3, min_color));
+                        let min_resp = min_resp.on_hover_text("Minimize Window");
+                        if min_resp.clicked() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                        }
+
+                        ui.add_space(8.0);
+
                         // Quick action buttons
                         if ui.add(egui::Button::new(RichText::new("Diagnostics").size(12.0)).min_size(Vec2::new(82.0, 26.0))).clicked() {
                             self.show_diagnostics_window = !self.show_diagnostics_window;
@@ -1716,11 +2196,27 @@ impl eframe::App for HapLabApp {
                             }
                         }
 
-                        let trans_btn = egui::Button::new(RichText::new("Transcode").strong().size(12.5).color(Color32::WHITE))
-                            .min_size(Vec2::new(86.0, 26.0))
-                            .fill(colors::ACCENT_BLUE)
-                            .corner_radius(CornerRadius::same(5));
-                        if ui.add(trans_btn).on_hover_text("Open Transcode & Ingest Panel (Ctrl+E)").clicked() {
+                        let file_is_selected = has_media || self.enc_input_path.is_some();
+                        let trans_btn = if file_is_selected {
+                            egui::Button::new(RichText::new("Transcode").strong().size(12.5).color(Color32::WHITE))
+                                .min_size(Vec2::new(86.0, 26.0))
+                                .fill(colors::ACCENT_BLUE)
+                                .corner_radius(CornerRadius::same(5))
+                        } else {
+                            egui::Button::new(RichText::new("Transcode").strong().size(12.5).color(colors::TEXT_FAINT))
+                                .min_size(Vec2::new(86.0, 26.0))
+                                .fill(colors::BG_CARD)
+                                .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
+                                .corner_radius(CornerRadius::same(5))
+                        };
+
+                        let trans_resp = ui.add_enabled(file_is_selected, trans_btn);
+                        let trans_resp = if file_is_selected {
+                            trans_resp.on_hover_text("Open Transcode & Ingest Panel (Ctrl+E)")
+                        } else {
+                            trans_resp.on_disabled_hover_text("Open or select a media file first to enable transcoding")
+                        };
+                        if trans_resp.clicked() {
                             self.show_transcode_window = !self.show_transcode_window;
                         }
 
@@ -1744,52 +2240,122 @@ impl eframe::App for HapLabApp {
                                 render_badge(ui, &format!("{}x{}", self.enc_detected_w, self.enc_detected_h), Color32::TRANSPARENT, colors::TEXT_PRIMARY);
                             }
                         }
+
+                        // Draggable middle spacer for moving window or toggling maximize
+                        let remaining_space = ui.available_size();
+                        if remaining_space.x > 8.0 {
+                            let (drag_rect, drag_resp) = ui.allocate_exact_size(remaining_space, egui::Sense::click_and_drag());
+                            if drag_resp.drag_started_by(egui::PointerButton::Primary) {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                            }
+                            if drag_resp.double_clicked() {
+                                if is_fullscreen {
+                                    self.toggle_fullscreen(&ctx);
+                                } else {
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
+                                }
+                            }
+
+                            // Centered media title in top bar if file is open
+                            let title_text = if let Some(ref p) = self.mov_path {
+                                p.file_name().map(|f| f.to_string_lossy().to_string())
+                            } else if let Some(ref p) = self.enc_input_path {
+                                p.file_name().map(|f| f.to_string_lossy().to_string())
+                            } else {
+                                None
+                            };
+
+                            if let Some(name) = title_text {
+                                let font_id = egui::FontId::proportional(12.0);
+                                let galley = ui.painter().layout_no_wrap(name, font_id, colors::TEXT_MUTED);
+                                if galley.size().x < drag_rect.width() - 20.0 {
+                                    let center_x = drag_rect.center().x - galley.size().x * 0.5;
+                                    let center_y = drag_rect.center().y - galley.size().y * 0.5;
+                                    ui.painter().galley(egui::pos2(center_x, center_y), galley, colors::TEXT_MUTED);
+                                }
+                            }
+                        }
                     });
                 });
-            });
 
-        // ===================================================================
-        // 2. BOTTOM TRANSPORT BAR & STATUS (PERMANENT)
-        // DOCKED FIRMLY TO BOTTOM VIEWPORT WITH TRANSLUCENT FROSTED GLASS
-        // ===================================================================
-        let transport_frame = if has_media {
-            egui::Frame::new()
-                .fill(Color32::from_rgba_premultiplied(12, 12, 12, 235)) // leebrown.me #0c0c0c obsidian
-                .stroke(Stroke::NONE)
-                .inner_margin(egui::Margin::symmetric(18, 8))
-        } else {
-            egui::Frame::new()
-                .fill(Color32::from_rgba_premultiplied(12, 12, 12, 160)) // Translucent obsidian showing ambient glow
-                .stroke(Stroke::NONE)
-                .inner_margin(egui::Margin::symmetric(18, 8))
-        };
+    }
 
-        egui::Panel::bottom("bottom_transport_panel")
-            .resizable(false)
-            .show_separator_line(false)
-            .frame(transport_frame)
-            .show(ui, |ui| {
+    fn render_bottom_transport(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
                 let has_reader = self.reader.is_some();
                 let has_video = self.has_video_loaded();
                 let is_still_image = self.still_image_info.is_some();
                 let count = self.video_total_frames();
                 let fps = self.video_fps();
-                let max_frame = count.saturating_sub(1);
 
-                // Scrubber slider across top of bottom panel
-                let old_frame = self.current_frame;
+                // Scrubber slider across top of bottom panel with dark track groove
                 let avail_w = ui.available_width();
-                let slider = egui::Slider::new(&mut self.current_frame, 0..=max_frame)
-                    .show_value(false)
-                    .trailing_fill(true);
-                let slider_resp = ui.add_enabled_ui(has_video && count > 0, |ui| {
-                    ui.spacing_mut().slider_width = avail_w;
-                    ui.spacing_mut().interact_size.y = 18.0;
-                    ui.add(slider)
-                }).inner;
+                let scrub_size = Vec2::new(avail_w, 18.0);
+                let (scrub_rect, scrub_resp) = ui.allocate_exact_size(
+                    scrub_size,
+                    if has_video && count > 0 {
+                        egui::Sense::click_and_drag()
+                    } else {
+                        egui::Sense::hover()
+                    },
+                );
 
-                if has_video {
-                    if slider_resp.drag_started() {
+                if has_video && count > 0 {
+                    if scrub_resp.hovered() || scrub_resp.dragged() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                }
+
+                let track_h = 6.0;
+                let track_rect = Rect::from_min_max(
+                    egui::pos2(scrub_rect.min.x, scrub_rect.center().y - track_h * 0.5),
+                    egui::pos2(scrub_rect.max.x, scrub_rect.center().y + track_h * 0.5),
+                );
+
+                // 1. Dark Track Groove
+                let track_bg = Color32::from_rgb(18, 18, 18);
+                let track_stroke = Stroke::new(1.0, Color32::from_rgb(34, 34, 34));
+                ui.painter().rect_filled(track_rect, CornerRadius::same(3), track_bg);
+                ui.painter().rect_stroke(track_rect, CornerRadius::same(3), track_stroke, egui::StrokeKind::Inside);
+
+                // 2. Trailing progress & Handle position
+                let progress = if has_video && count > 1 {
+                    (self.current_frame as f32 / (count - 1) as f32).clamp(0.0, 1.0)
+                } else {
+                    0.0 // When no video is selected, handle sits on the far left
+                };
+
+                let fill_w = progress * track_rect.width();
+                if fill_w > 0.0 {
+                    let fill_rect = Rect::from_min_max(
+                        track_rect.min,
+                        egui::pos2(track_rect.min.x + fill_w, track_rect.max.y),
+                    );
+                    ui.painter().rect_filled(fill_rect, CornerRadius::same(3), colors::ACCENT_RED);
+                }
+
+                // 3. Seek Handle ("seek thing")
+                let knob_x = track_rect.min.x + progress * track_rect.width();
+                let knob_center = egui::pos2(knob_x, track_rect.center().y);
+                if has_video && count > 0 {
+                    let is_active = scrub_resp.hovered() || scrub_resp.dragged();
+                    let knob_radius = if is_active { 7.0 } else { 5.5 };
+                    let knob_stroke = if is_active {
+                        Stroke::new(1.5, colors::ACCENT_RED)
+                    } else {
+                        Stroke::new(1.0, Color32::from_rgb(200, 200, 200))
+                    };
+                    ui.painter().circle_filled(knob_center, knob_radius, Color32::WHITE);
+                    ui.painter().circle_stroke(knob_center, knob_radius, knob_stroke);
+                } else {
+                    // Disabled knob positioned on the far left
+                    let knob_radius = 4.5;
+                    ui.painter().circle_filled(knob_center, knob_radius, Color32::from_rgb(70, 70, 70));
+                    ui.painter().circle_stroke(knob_center, knob_radius, Stroke::new(1.0, Color32::from_rgb(45, 45, 45)));
+                }
+
+                // 4. Scrubbing interaction
+                if has_video && count > 0 {
+                    if scrub_resp.drag_started() {
                         if self.is_playing {
                             self.was_playing_before_scrub = true;
                             self.is_playing = false;
@@ -1798,10 +2364,17 @@ impl eframe::App for HapLabApp {
                             }
                         }
                     }
-                    if slider_resp.dragged() && old_frame != self.current_frame {
-                        self.seek_to_frame(self.current_frame, &ctx);
+                    if scrub_resp.clicked() || scrub_resp.dragged() {
+                        if let Some(mouse_pos) = scrub_resp.interact_pointer_pos() {
+                            let t = ((mouse_pos.x - track_rect.min.x) / track_rect.width()).clamp(0.0, 1.0);
+                            let target_frame = (t * (count - 1) as f32).round() as usize;
+                            if target_frame != self.current_frame {
+                                self.current_frame = target_frame;
+                                self.seek_to_frame(self.current_frame, &ctx);
+                            }
+                        }
                     }
-                    if slider_resp.drag_stopped() {
+                    if scrub_resp.drag_stopped() {
                         if self.was_playing_before_scrub {
                             self.was_playing_before_scrub = false;
                             self.is_playing = true;
@@ -1817,8 +2390,15 @@ impl eframe::App for HapLabApp {
                         } else {
                             self.seek_to_frame(self.current_frame, &ctx);
                         }
-                    } else if !slider_resp.dragged() && old_frame != self.current_frame {
-                        self.seek_to_frame(self.current_frame, &ctx);
+                    }
+
+                    if scrub_resp.hovered() {
+                        if let Some(mouse_pos) = scrub_resp.hover_pos() {
+                            let t = ((mouse_pos.x - track_rect.min.x) / track_rect.width()).clamp(0.0, 1.0);
+                            let hover_frame = (t * (count - 1) as f32).round() as usize;
+                            let hover_tc = format_smpte_timecode(hover_frame, fps);
+                            scrub_resp.on_hover_text(format!("{} (Frame {})", hover_tc, hover_frame));
+                        }
                     }
                 }
 
@@ -2288,216 +2868,9 @@ impl eframe::App for HapLabApp {
                         self.toast = None;
                     }
                 }
-            });
 
-        // ===================================================================
-        // 3. CENTRAL MAIN CANVAS (PLAYER VIEWPORT)
-        // OCCUPIES REMAINING VIEWPORT SPACE BETWEEN TOP AND BOTTOM PANELS
-        // ===================================================================
-        let canvas_frame = if has_media {
-            egui::Frame::new()
-                .fill(colors::BG_APP)
-                .stroke(Stroke::NONE)
-                .inner_margin(egui::Margin::same(8))
-        } else {
-            egui::Frame::new()
-                .fill(Color32::TRANSPARENT)
-                .stroke(Stroke::NONE)
-                .inner_margin(egui::Margin::ZERO)
-        };
-
-        egui::CentralPanel::default()
-            .frame(canvas_frame)
-            .show(ui, |ui: &mut egui::Ui| {
-                let has_media = self.reader.is_some() || self.generic_player.is_some() || self.preview_texture.is_some() || self.still_image_info.is_some();
-
-                if has_media {
-                    let available_size = ui.available_size();
-                    let (content_w, content_h) = if let Some(ref r) = self.reader {
-                        (r.width() as f32, r.height() as f32)
-                    } else if let Some(ref p) = self.generic_player {
-                        (p.original_width as f32, p.original_height as f32)
-                    } else if let Some(ref img) = self.still_image_info {
-                        (img.width as f32, img.height as f32)
-                    } else if self.enc_detected_w > 0 && self.enc_detected_h > 0 {
-                        (self.enc_detected_w as f32, self.enc_detected_h as f32)
-                    } else {
-                        (16.0, 9.0)
-                    };
-
-                    // Derive aspect ratio strictly from active texture if loaded,
-                    // guaranteeing 100% distortion-free fit without any stretching.
-                    let aspect = if let Some(ref tex) = self.preview_texture {
-                        let sz = tex.size_vec2();
-                        if sz.y > 0.0 {
-                            sz.x / sz.y
-                        } else {
-                            content_w / content_h.max(1.0)
-                        }
-                    } else {
-                        content_w / content_h.max(1.0)
-                    };
-
-                    let aspect = aspect.max(0.01);
-                    let (final_w, final_h) = if available_size.x / aspect <= available_size.y {
-                        (available_size.x, available_size.x / aspect)
-                    } else {
-                        (available_size.y * aspect, available_size.y)
-                    };
-
-                    let y_padding = ((available_size.y - final_h) * 0.5).max(0.0);
-                    if y_padding > 0.0 {
-                        ui.add_space(y_padding);
-                    }
-
-                    ui.vertical_centered(|ui| {
-                        let (rect, resp) = ui.allocate_exact_size(Vec2::new(final_w, final_h), egui::Sense::click());
-                        if resp.double_clicked() {
-                            self.toggle_fullscreen(ui.ctx());
-                        }
-
-                        // Paint Canvas Background
-                        match self.bg_mode {
-                            BackgroundViewMode::Checkerboard => {
-                                paint_transparency_checkerboard(ui.painter(), rect);
-                            }
-                            BackgroundViewMode::Dark => {
-                                ui.painter().rect_filled(rect, 0, Color32::from_rgb(12, 12, 12));
-                            }
-                            BackgroundViewMode::Light => {
-                                ui.painter().rect_filled(rect, 0, Color32::from_rgb(180, 185, 195));
-                            }
-                        }
-
-                        // Paint Media Frame
-                        if let Some(ref texture) = self.preview_texture {
-                            ui.painter().image(
-                                texture.id(),
-                                rect,
-                                Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                                Color32::WHITE,
-                            );
-                        }
-
-                        // Floating Stream Telemetry HUD (Top-Left of canvas)
-                        if self.show_hud_overlay && self.has_video_loaded() {
-                            let hud_rect = Rect::from_min_size(
-                                rect.min + Vec2::new(12.0, 12.0),
-                                Vec2::new(260.0, 130.0),
-                            );
-                            ui.painter().rect_filled(
-                                hud_rect,
-                                CornerRadius::same(6),
-                                Color32::from_rgba_premultiplied(16, 16, 16, 230),
-                            );
-                            ui.painter().rect_stroke(
-                                hud_rect,
-                                CornerRadius::same(6),
-                                Stroke::new(1.0, colors::BORDER_SUBTLE),
-                                egui::StrokeKind::Inside,
-                            );
-
-                            let mut hud_ui = ui.new_child(
-                                egui::UiBuilder::new()
-                                    .max_rect(hud_rect.shrink(10.0))
-                                    .layout(egui::Layout::top_down(egui::Align::Min)),
-                            );
-
-                            if let Some(ref r) = self.reader {
-                                hud_ui.horizontal(|ui| {
-                                    ui.strong(RichText::new(r.format().name()).color(colors::ACCENT_CYAN).size(13.0));
-                                    ui.label(RichText::new(format!("{}x{}", r.width(), r.height())).color(colors::TEXT_PRIMARY).size(12.0));
-                                });
-                                hud_ui.add_space(4.0);
-                                let budget_ms = 1000.0 / r.fps().max(1.0);
-                                let decode_color = if self.last_decode_ms <= budget_ms {
-                                    colors::ACCENT_GREEN
-                                } else {
-                                    colors::ACCENT_RED
-                                };
-                                hud_ui.label(RichText::new(format!("Decode: {:.2} ms", self.last_decode_ms)).color(decode_color).size(11.5));
-
-                                if let Some(ref s) = self.stream_summary {
-                                    hud_ui.label(RichText::new(format!("Bitrate: {:.2} Mbps | Frame: {}", s.avg_bitrate_mbps, format_bytes(self.last_packet_bytes as u64))).color(colors::TEXT_MUTED).size(11.0));
-                                    hud_ui.label(RichText::new(format!("Texture: {}", if self.gpu_supports_bc { "Hardware Direct BC Upload" } else { "CPU Software Fallback" })).color(colors::TEXT_FAINT).size(10.5));
-                                }
-                            } else if let Some(ref p) = self.generic_player {
-                                hud_ui.horizontal(|ui| {
-                                    ui.strong(RichText::new(p.codec.to_uppercase()).color(colors::ACCENT_CYAN).size(13.0));
-                                    ui.label(RichText::new(format!("{}x{}", p.original_width, p.original_height)).color(colors::TEXT_PRIMARY).size(12.0));
-                                });
-                                hud_ui.add_space(4.0);
-                                hud_ui.label(RichText::new(format!("Playback FPS: {:.1} (Target: {:.0})", self.playback_fps, p.fps)).color(colors::ACCENT_GREEN).size(11.5));
-                                hud_ui.label(RichText::new("Decoder: Hardware Accelerated (Auto)").color(colors::ACCENT_CYAN).size(11.0));
-                                hud_ui.label(RichText::new(format!("Render Target: {}x{}", p.play_width, p.play_height)).color(colors::TEXT_FAINT).size(10.5));
-                            }
-                        }
-                    });
-                } else if !self.is_loading_media {
-                    // --- CLICK-ANYWHERE PLAYBACK AREA ---
-                    let available_size = ui.available_size();
-                    let (_canvas_rect, resp) = ui.allocate_exact_size(available_size, egui::Sense::click());
-
-                    if resp.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    }
-
-                    if resp.clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("All Media", &["mov", "mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts", "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
-                            .add_filter("QuickTime HAP Videos (*.mov)", &["mov"])
-                            .add_filter("Video Files (*.mp4, *.mkv, *.webm, *.mxf, *.avi)", &["mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts"])
-                            .add_filter("Still Images (*.png, *.jpg, *.tiff, *.webp, *.bmp)", &["png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
-                            .pick_file()
-                        {
-                            self.open_media_file(path, &ctx);
-                        }
-                    }
-                }
-
-                if self.is_loading_media {
-                    let center = ui.max_rect().center();
-                    let loading_rect = Rect::from_center_size(center, Vec2::new(260.0, 52.0));
-                    ui.painter().rect_filled(
-                        loading_rect,
-                        CornerRadius::same(10),
-                        Color32::from_rgba_premultiplied(16, 16, 16, 240),
-                    );
-                    ui.painter().rect_stroke(
-                        loading_rect,
-                        CornerRadius::same(10),
-                        Stroke::new(1.0, colors::BORDER_SUBTLE),
-                        egui::StrokeKind::Inside,
-                    );
-                    let mut loading_ui = ui.new_child(
-                        egui::UiBuilder::new()
-                            .max_rect(loading_rect.shrink(10.0))
-                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-                    );
-                    loading_ui.spinner();
-                    loading_ui.add_space(8.0);
-                    loading_ui.label(
-                        RichText::new(format!("Loading {}...", self.loading_filename))
-                            .size(13.0)
-                            .color(colors::TEXT_PRIMARY)
-                            .strong(),
-                    );
-                }
-            });
-
-        // ===================================================================
-        // 4. FLOATING STUDIO WINDOWS / DIALOGS
-        // ===================================================================
-        self.show_transcode_dialog(&ctx);
-        self.show_benchmark_dialog(&ctx);
-        self.show_audit_dialog(&ctx);
-        self.show_diagnostics_dialog(&ctx);
-        self.show_shortcuts_dialog(&ctx);
-        self.show_about_dialog(&ctx);
     }
-}
 
-impl HapLabApp {
     // --- DIALOG: TRANSCODE TO HAP MOV ---
     fn show_transcode_dialog(&mut self, ctx: &egui::Context) {
         if !self.show_transcode_window {
@@ -2527,12 +2900,27 @@ impl HapLabApp {
                             && self.enc_rx.is_none();
 
                         ui.horizontal(|ui| {
-                            let encode_btn = egui::Button::new(RichText::new("Start Transcoding").size(14.0).strong())
-                                .min_size(Vec2::new(160.0, 36.0))
-                                .fill(colors::ACCENT_BLUE)
-                                .corner_radius(CornerRadius::same(6));
+                            let encode_btn = if can_start {
+                                egui::Button::new(RichText::new("Start Transcoding").size(14.0).color(Color32::WHITE).strong())
+                                    .min_size(Vec2::new(160.0, 36.0))
+                                    .fill(colors::ACCENT_BLUE)
+                                    .corner_radius(CornerRadius::same(6))
+                            } else {
+                                egui::Button::new(RichText::new("Start Transcoding").size(14.0).color(colors::TEXT_FAINT).strong())
+                                    .min_size(Vec2::new(160.0, 36.0))
+                                    .fill(colors::BG_ELEVATED)
+                                    .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
+                                    .corner_radius(CornerRadius::same(6))
+                            };
 
-                            if ui.add_enabled(can_start, encode_btn).clicked() {
+                            let encode_resp = ui.add_enabled(can_start, encode_btn);
+                            let encode_resp = if can_start {
+                                encode_resp.on_hover_text("Start encoding selected media to HAP QuickTime MOV")
+                            } else {
+                                encode_resp.on_disabled_hover_text("Select a source file and output destination to enable transcoding")
+                            };
+
+                            if encode_resp.clicked() {
                                 if let (Some(ref in_p), Some(ref out_p)) = (&self.enc_input_path, &self.enc_output_path) {
                                     let cancel_flag = Arc::new(AtomicBool::new(false));
                                     let (tx, rx) = crossbeam_channel::unbounded();

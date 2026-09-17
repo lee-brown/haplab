@@ -56,6 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_inner_size([1040.0, 780.0])
         .with_min_inner_size([800.0, 520.0])
         .with_title("HapLab")
+        .with_decorations(false)
         .with_drag_and_drop(true);
 
     if let Some(icon) = icon_data {
