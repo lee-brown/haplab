@@ -109,6 +109,7 @@ pub struct HapLabApp {
     current_frame: usize,
     is_playing: bool,
     loop_playback: bool,
+    playback_clock_synced: bool,
     last_frame_time: Instant,
     preview_texture: Option<egui::TextureHandle>,
     raw_frame_cache: Option<Vec<u8>>,
@@ -231,6 +232,7 @@ impl Default for HapLabApp {
             current_frame: 0,
             is_playing: false,
             loop_playback: true,
+            playback_clock_synced: false,
             last_frame_time: Instant::now(),
             preview_texture: None,
             raw_frame_cache: None,
@@ -571,6 +573,7 @@ impl HapLabApp {
                     self.current_frame = 0;
                 }
                 self.is_playing = true;
+                self.playback_clock_synced = false;
                 self.playback_start_instant = Instant::now();
                 self.playback_start_frame = self.current_frame;
                 self.last_frame_time = Instant::now();
@@ -594,6 +597,7 @@ impl HapLabApp {
         if let Some(ref mut player) = self.generic_player {
             if self.is_playing {
                 player.start_playback(target);
+                self.playback_clock_synced = false;
                 self.playback_start_instant = Instant::now();
                 self.playback_start_frame = target;
                 self.last_frame_time = Instant::now();
@@ -659,6 +663,7 @@ impl HapLabApp {
                     .ok();
             }
         } else if self.reader.is_some() {
+            self.playback_clock_synced = false;
             self.playback_start_instant = Instant::now();
             self.playback_start_frame = target;
             self.update_preview_frame(ctx);
@@ -980,12 +985,19 @@ impl eframe::App for HapLabApp {
             if let Some(ref reader) = self.reader {
                 let fps = reader.fps().max(1.0);
                 let count = reader.frame_count();
-                let elapsed_secs = self.playback_start_instant.elapsed().as_secs_f64();
-                let mut target_frame = self.playback_start_frame + (elapsed_secs * fps as f64).floor() as usize;
+                let mut target_frame = if self.playback_clock_synced {
+                    let elapsed_secs = self.playback_start_instant.elapsed().as_secs_f64();
+                    self.playback_start_frame + (elapsed_secs * fps as f64).floor() as usize
+                } else {
+                    self.playback_start_instant = Instant::now();
+                    self.playback_clock_synced = true;
+                    self.playback_start_frame
+                };
 
                 if count > 0 {
                     if target_frame >= count {
                         if self.loop_playback {
+                            self.playback_clock_synced = false;
                             self.playback_start_instant = Instant::now();
                             self.playback_start_frame = 0;
                             target_frame = 0;
@@ -1012,11 +1024,16 @@ impl eframe::App for HapLabApp {
             } else if let Some(ref mut player) = self.generic_player {
                 let fps = player.fps.max(1.0);
                 let total = player.total_frames;
-                let elapsed_secs = self.playback_start_instant.elapsed().as_secs_f64();
-                let mut target_frame = self.playback_start_frame + (elapsed_secs * fps as f64).floor() as usize;
+                let mut target_frame = if self.playback_clock_synced {
+                    let elapsed_secs = self.playback_start_instant.elapsed().as_secs_f64();
+                    self.playback_start_frame + (elapsed_secs * fps as f64).floor() as usize
+                } else {
+                    self.playback_start_frame
+                };
 
                 if total > 0 && target_frame >= total {
                     if self.loop_playback {
+                        self.playback_clock_synced = false;
                         self.playback_start_instant = Instant::now();
                         self.playback_start_frame = 0;
                         self.current_frame = 0;
@@ -1035,6 +1052,14 @@ impl eframe::App for HapLabApp {
                 loop {
                     match player.try_recv_frame() {
                         Ok((frame_idx, rgba)) => {
+                            if !self.playback_clock_synced {
+                                // First decoded frame has arrived from the player thread.
+                                // Synchronize wall clock right now so startup never fast-forwards.
+                                self.playback_start_instant = Instant::now();
+                                self.playback_start_frame = frame_idx;
+                                self.playback_clock_synced = true;
+                                target_frame = frame_idx;
+                            }
                             if frame_idx <= target_frame {
                                 frames_drained += 1;
                                 latest_frame = Some((frame_idx, rgba));
@@ -1046,6 +1071,7 @@ impl eframe::App for HapLabApp {
                         Err(crossbeam_channel::TryRecvError::Empty) => break,
                         Err(crossbeam_channel::TryRecvError::Disconnected) => {
                             if self.loop_playback && total > 0 {
+                                self.playback_clock_synced = false;
                                 self.playback_start_instant = Instant::now();
                                 self.playback_start_frame = 0;
                                 self.current_frame = 0;
@@ -1355,6 +1381,9 @@ impl eframe::App for HapLabApp {
                         self.generic_player = Some(player);
                         self.current_frame = 0;
                         self.is_playing = true;
+                        self.playback_clock_synced = false;
+                        self.playback_start_instant = Instant::now();
+                        self.playback_start_frame = 0;
                         self.last_frame_time = Instant::now();
                         self.playback_timer = Instant::now();
                         self.playback_frames_count = 0;
@@ -1774,6 +1803,7 @@ impl eframe::App for HapLabApp {
                         if self.was_playing_before_scrub {
                             self.was_playing_before_scrub = false;
                             self.is_playing = true;
+                            self.playback_clock_synced = false;
                             self.playback_start_instant = Instant::now();
                             self.playback_start_frame = self.current_frame;
                             self.last_frame_time = Instant::now();
@@ -1888,16 +1918,62 @@ impl eframe::App for HapLabApp {
                         }
                     } else if has_video {
                         // Standard player transport buttons
-                        if ui.add_enabled(count > 0, egui::Button::new("|<").min_size(Vec2::new(30.0, 26.0))).on_hover_text("Jump to Start (Home)").clicked() {
+                        let btn_size = Vec2::new(30.0, 26.0);
+
+                        // 1. Jump to Start (|<)
+                        let (s_rect, s_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                        let s_resp = s_resp.on_hover_text("Jump to Start (Home)");
+                        if s_resp.clicked() && count > 0 {
                             self.seek_to_frame(0, &ctx);
                         }
-                        if ui.add_enabled(count > 0, egui::Button::new("-10").min_size(Vec2::new(36.0, 26.0))).on_hover_text("Step -10 Frames (Shift+Left)").clicked() {
+                        let s_bg = if s_resp.hovered() && count > 0 { Color32::from_rgb(36, 42, 54) } else { Color32::from_rgb(22, 26, 35) };
+                        let s_icon = if count > 0 { if s_resp.hovered() { Color32::WHITE } else { Color32::from_rgb(200, 210, 225) } } else { Color32::from_rgb(70, 78, 95) };
+                        ui.painter().rect_filled(s_rect, CornerRadius::same(5), s_bg);
+                        ui.painter().rect_stroke(s_rect, CornerRadius::same(5), Stroke::new(1.0, Color32::from_rgb(38, 44, 58)), egui::StrokeKind::Inside);
+                        let sc = s_rect.center();
+                        ui.painter().rect_filled(Rect::from_center_size(egui::pos2(sc.x - 4.5, sc.y), Vec2::new(2.0, 10.0)), CornerRadius::same(1), s_icon);
+                        let sp0 = egui::pos2(sc.x - 3.5, sc.y);
+                        let sp1 = egui::pos2(sc.x + 3.5, sc.y - 4.5);
+                        let sp2 = egui::pos2(sc.x + 3.5, sc.y + 4.5);
+                        ui.painter().add(egui::Shape::convex_polygon(vec![sp0, sp1, sp2], s_icon, Stroke::NONE));
+
+                        // 2. Step -10 Frames (<< standard rewind double triangle)
+                        let (r10_rect, r10_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                        let r10_resp = r10_resp.on_hover_text("Step -10 Frames (Shift+Left)");
+                        if r10_resp.clicked() && count > 0 {
                             self.seek_to_frame(self.current_frame.saturating_sub(10), &ctx);
                         }
-                        if ui.add_enabled(count > 0, egui::Button::new("<").min_size(Vec2::new(30.0, 26.0))).on_hover_text("Step -1 Frame (Left)").clicked() {
+                        let r10_bg = if r10_resp.hovered() && count > 0 { Color32::from_rgb(36, 42, 54) } else { Color32::from_rgb(22, 26, 35) };
+                        let r10_icon = if count > 0 { if r10_resp.hovered() { Color32::WHITE } else { Color32::from_rgb(200, 210, 225) } } else { Color32::from_rgb(70, 78, 95) };
+                        ui.painter().rect_filled(r10_rect, CornerRadius::same(5), r10_bg);
+                        ui.painter().rect_stroke(r10_rect, CornerRadius::same(5), Stroke::new(1.0, Color32::from_rgb(38, 44, 58)), egui::StrokeKind::Inside);
+                        let r10_c = r10_rect.center();
+                        let a0 = egui::pos2(r10_c.x - 5.0, r10_c.y);
+                        let a1 = egui::pos2(r10_c.x - 0.5, r10_c.y - 4.5);
+                        let a2 = egui::pos2(r10_c.x - 0.5, r10_c.y + 4.5);
+                        ui.painter().add(egui::Shape::convex_polygon(vec![a0, a1, a2], r10_icon, Stroke::NONE));
+                        let b0 = egui::pos2(r10_c.x + 0.5, r10_c.y);
+                        let b1 = egui::pos2(r10_c.x + 5.0, r10_c.y - 4.5);
+                        let b2 = egui::pos2(r10_c.x + 5.0, r10_c.y + 4.5);
+                        ui.painter().add(egui::Shape::convex_polygon(vec![b0, b1, b2], r10_icon, Stroke::NONE));
+
+                        // 3. Step -1 Frame (< single left triangle)
+                        let (r1_rect, r1_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                        let r1_resp = r1_resp.on_hover_text("Step -1 Frame (Left)");
+                        if r1_resp.clicked() && count > 0 {
                             self.seek_to_frame(self.current_frame.saturating_sub(1), &ctx);
                         }
+                        let r1_bg = if r1_resp.hovered() && count > 0 { Color32::from_rgb(36, 42, 54) } else { Color32::from_rgb(22, 26, 35) };
+                        let r1_icon = if count > 0 { if r1_resp.hovered() { Color32::WHITE } else { Color32::from_rgb(200, 210, 225) } } else { Color32::from_rgb(70, 78, 95) };
+                        ui.painter().rect_filled(r1_rect, CornerRadius::same(5), r1_bg);
+                        ui.painter().rect_stroke(r1_rect, CornerRadius::same(5), Stroke::new(1.0, Color32::from_rgb(38, 44, 58)), egui::StrokeKind::Inside);
+                        let r1_c = r1_rect.center();
+                        let c0 = egui::pos2(r1_c.x - 3.5, r1_c.y);
+                        let c1 = egui::pos2(r1_c.x + 3.0, r1_c.y - 5.0);
+                        let c2 = egui::pos2(r1_c.x + 3.0, r1_c.y + 5.0);
+                        ui.painter().add(egui::Shape::convex_polygon(vec![c0, c1, c2], r1_icon, Stroke::NONE));
 
+                        // 4. Play / Pause Button
                         let (btn_rect, btn_resp) = ui.allocate_exact_size(Vec2::new(52.0, 26.0), egui::Sense::click());
                         let btn_resp = btn_resp.on_hover_text(if self.is_playing { "Pause (Space)" } else { "Play (Space)" });
                         if btn_resp.clicked() {
@@ -1949,17 +2025,61 @@ impl eframe::App for HapLabApp {
                             ));
                         }
 
-                        if ui.add_enabled(count > 0, egui::Button::new(">").min_size(Vec2::new(30.0, 26.0))).on_hover_text("Step +1 Frame (Right)").clicked() {
+                        // 5. Step +1 Frame (> single right triangle)
+                        let (f1_rect, f1_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                        let f1_resp = f1_resp.on_hover_text("Step +1 Frame (Right)");
+                        if f1_resp.clicked() && count > 0 {
                             self.seek_to_frame(self.current_frame + 1, &ctx);
                         }
-                        if ui.add_enabled(count > 0, egui::Button::new("+10").min_size(Vec2::new(36.0, 26.0))).on_hover_text("Step +10 Frames (Shift+Right)").clicked() {
+                        let f1_bg = if f1_resp.hovered() && count > 0 { Color32::from_rgb(36, 42, 54) } else { Color32::from_rgb(22, 26, 35) };
+                        let f1_icon = if count > 0 { if f1_resp.hovered() { Color32::WHITE } else { Color32::from_rgb(200, 210, 225) } } else { Color32::from_rgb(70, 78, 95) };
+                        ui.painter().rect_filled(f1_rect, CornerRadius::same(5), f1_bg);
+                        ui.painter().rect_stroke(f1_rect, CornerRadius::same(5), Stroke::new(1.0, Color32::from_rgb(38, 44, 58)), egui::StrokeKind::Inside);
+                        let f1_c = f1_rect.center();
+                        let d0 = egui::pos2(f1_c.x + 3.5, f1_c.y);
+                        let d1 = egui::pos2(f1_c.x - 3.0, f1_c.y - 5.0);
+                        let d2 = egui::pos2(f1_c.x - 3.0, f1_c.y + 5.0);
+                        ui.painter().add(egui::Shape::convex_polygon(vec![d0, d1, d2], f1_icon, Stroke::NONE));
+
+                        // 6. Step +10 Frames (>> standard fast-forward double triangle)
+                        let (f10_rect, f10_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                        let f10_resp = f10_resp.on_hover_text("Step +10 Frames (Shift+Right)");
+                        if f10_resp.clicked() && count > 0 {
                             self.seek_to_frame(self.current_frame + 10, &ctx);
                         }
-                        if ui.add_enabled(count > 0, egui::Button::new(">|").min_size(Vec2::new(30.0, 26.0))).on_hover_text("Jump to End (End)").clicked() {
+                        let f10_bg = if f10_resp.hovered() && count > 0 { Color32::from_rgb(36, 42, 54) } else { Color32::from_rgb(22, 26, 35) };
+                        let f10_icon = if count > 0 { if f10_resp.hovered() { Color32::WHITE } else { Color32::from_rgb(200, 210, 225) } } else { Color32::from_rgb(70, 78, 95) };
+                        ui.painter().rect_filled(f10_rect, CornerRadius::same(5), f10_bg);
+                        ui.painter().rect_stroke(f10_rect, CornerRadius::same(5), Stroke::new(1.0, Color32::from_rgb(38, 44, 58)), egui::StrokeKind::Inside);
+                        let f10_c = f10_rect.center();
+                        let e0 = egui::pos2(f10_c.x - 0.5, f10_c.y);
+                        let e1 = egui::pos2(f10_c.x - 5.0, f10_c.y - 4.5);
+                        let e2 = egui::pos2(f10_c.x - 5.0, f10_c.y + 4.5);
+                        ui.painter().add(egui::Shape::convex_polygon(vec![e0, e1, e2], f10_icon, Stroke::NONE));
+                        let g0 = egui::pos2(f10_c.x + 5.0, f10_c.y);
+                        let g1 = egui::pos2(f10_c.x + 0.5, f10_c.y - 4.5);
+                        let g2 = egui::pos2(f10_c.x + 0.5, f10_c.y + 4.5);
+                        ui.painter().add(egui::Shape::convex_polygon(vec![g0, g1, g2], f10_icon, Stroke::NONE));
+
+                        // 7. Jump to End (>|)
+                        let (e_rect, e_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                        let e_resp = e_resp.on_hover_text("Jump to End (End)");
+                        if e_resp.clicked() && count > 0 {
                             self.seek_to_frame(count.saturating_sub(1), &ctx);
                         }
+                        let e_bg = if e_resp.hovered() && count > 0 { Color32::from_rgb(36, 42, 54) } else { Color32::from_rgb(22, 26, 35) };
+                        let e_icon = if count > 0 { if e_resp.hovered() { Color32::WHITE } else { Color32::from_rgb(200, 210, 225) } } else { Color32::from_rgb(70, 78, 95) };
+                        ui.painter().rect_filled(e_rect, CornerRadius::same(5), e_bg);
+                        ui.painter().rect_stroke(e_rect, CornerRadius::same(5), Stroke::new(1.0, Color32::from_rgb(38, 44, 58)), egui::StrokeKind::Inside);
+                        let ec = e_rect.center();
+                        let h0 = egui::pos2(ec.x + 3.5, ec.y);
+                        let h1 = egui::pos2(ec.x - 3.5, ec.y - 4.5);
+                        let h2 = egui::pos2(ec.x - 3.5, ec.y + 4.5);
+                        ui.painter().add(egui::Shape::convex_polygon(vec![h0, h1, h2], e_icon, Stroke::NONE));
+                        ui.painter().rect_filled(Rect::from_center_size(egui::pos2(ec.x + 4.5, ec.y), Vec2::new(2.0, 10.0)), CornerRadius::same(1), e_icon);
 
-                        let (loop_rect, loop_resp) = ui.allocate_exact_size(Vec2::new(32.0, 26.0), egui::Sense::click());
+                        // 8. Loop Button with Highlight
+                        let (loop_rect, loop_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
                         if loop_resp.clicked() {
                             self.loop_playback = !self.loop_playback;
                             self.notify(
@@ -1992,33 +2112,29 @@ impl eframe::App for HapLabApp {
                         ui.painter().rect_stroke(loop_rect, CornerRadius::same(5), loop_border, egui::StrokeKind::Inside);
 
                         let lc = loop_rect.center();
-                        let l_stroke = Stroke::new(1.5, loop_icon);
-                        let top_y = lc.y - 4.0;
-                        let bot_y = lc.y + 4.0;
+                        let l_stroke = Stroke::new(1.6, loop_icon);
 
-                        // Top horizontal segment and right arrowhead
-                        ui.painter().line_segment([egui::pos2(lc.x - 3.5, top_y), egui::pos2(lc.x + 3.0, top_y)], l_stroke);
-                        let p_tip = egui::pos2(lc.x + 6.0, top_y);
-                        let p_top = egui::pos2(lc.x + 2.5, top_y - 3.0);
-                        let p_bot = egui::pos2(lc.x + 2.5, top_y + 3.0);
-                        ui.painter().add(egui::Shape::convex_polygon(vec![p_tip, p_top, p_bot], loop_icon, Stroke::NONE));
+                        // Upper branch: vertical up, rounded turn right, horizontal right, arrow pointing right
+                        let x_l = lc.x - 5.5;
+                        let x_r = lc.x + 5.5;
+                        let y_t = lc.y - 4.5;
+                        let r = 2.5;
 
-                        // Right bend curving down to bottom
-                        ui.painter().line_segment([egui::pos2(lc.x + 2.0, top_y), egui::pos2(lc.x + 4.5, lc.y - 1.5)], l_stroke);
-                        ui.painter().line_segment([egui::pos2(lc.x + 4.5, lc.y - 1.5), egui::pos2(lc.x + 4.5, lc.y + 1.5)], l_stroke);
-                        ui.painter().line_segment([egui::pos2(lc.x + 4.5, lc.y + 1.5), egui::pos2(lc.x + 2.0, bot_y)], l_stroke);
+                        ui.painter().line_segment([egui::pos2(x_l, lc.y - 0.5), egui::pos2(x_l, y_t + r)], l_stroke);
+                        ui.painter().line_segment([egui::pos2(x_l, y_t + r), egui::pos2(x_l + r, y_t)], l_stroke);
+                        ui.painter().line_segment([egui::pos2(x_l + r, y_t), egui::pos2(x_r, y_t)], l_stroke);
+                        // Upper arrow (pointing right)
+                        ui.painter().line_segment([egui::pos2(x_r - 3.5, y_t - 3.0), egui::pos2(x_r, y_t)], l_stroke);
+                        ui.painter().line_segment([egui::pos2(x_r, y_t), egui::pos2(x_r - 3.5, y_t + 3.0)], l_stroke);
 
-                        // Bottom horizontal segment and left arrowhead
-                        ui.painter().line_segment([egui::pos2(lc.x + 2.0, bot_y), egui::pos2(lc.x - 3.0, bot_y)], l_stroke);
-                        let q_tip = egui::pos2(lc.x - 6.0, bot_y);
-                        let q_top = egui::pos2(lc.x - 2.5, bot_y - 3.0);
-                        let q_bot = egui::pos2(lc.x - 2.5, bot_y + 3.0);
-                        ui.painter().add(egui::Shape::convex_polygon(vec![q_tip, q_top, q_bot], loop_icon, Stroke::NONE));
-
-                        // Left bend curving up to top
-                        ui.painter().line_segment([egui::pos2(lc.x - 2.0, bot_y), egui::pos2(lc.x - 4.5, lc.y + 1.5)], l_stroke);
-                        ui.painter().line_segment([egui::pos2(lc.x - 4.5, lc.y + 1.5), egui::pos2(lc.x - 4.5, lc.y - 1.5)], l_stroke);
-                        ui.painter().line_segment([egui::pos2(lc.x - 4.5, lc.y - 1.5), egui::pos2(lc.x - 2.0, top_y)], l_stroke);
+                        // Lower branch: vertical down, rounded turn left, horizontal left, arrow pointing left
+                        let y_b = lc.y + 4.5;
+                        ui.painter().line_segment([egui::pos2(x_r, lc.y + 0.5), egui::pos2(x_r, y_b - r)], l_stroke);
+                        ui.painter().line_segment([egui::pos2(x_r, y_b - r), egui::pos2(x_r - r, y_b)], l_stroke);
+                        ui.painter().line_segment([egui::pos2(x_r - r, y_b), egui::pos2(x_l, y_b)], l_stroke);
+                        // Lower arrow (pointing left)
+                        ui.painter().line_segment([egui::pos2(x_l + 3.5, y_b - 3.0), egui::pos2(x_l, y_b)], l_stroke);
+                        ui.painter().line_segment([egui::pos2(x_l, y_b), egui::pos2(x_l + 3.5, y_b + 3.0)], l_stroke);
                     } else if self.enc_input_path.is_some() {
                         // Background transcode in progress
                         if let Some(ref status) = self.enc_status {
