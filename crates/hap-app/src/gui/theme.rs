@@ -80,6 +80,7 @@ pub fn apply_studio_theme(ctx: &egui::Context) {
             style.spacing.interact_size.y = 32.0;
             style.spacing.combo_width = 180.0;
             style.spacing.slider_rail_height = 8.0;
+            style.spacing.slider_width = 300.0;
         });
     }
 

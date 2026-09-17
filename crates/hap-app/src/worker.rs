@@ -181,8 +181,8 @@ pub fn parse_probe_output(out_str: &str) -> Result<(String, usize, usize, f32, u
                 "height" => height = v.parse().unwrap_or(0),
                 "r_frame_rate" => r_fps_str = v.to_string(),
                 "avg_frame_rate" => avg_fps_str = v.to_string(),
-                "duration" => {
-                    if let Ok(d) = v.parse::<f32>() {
+                "duration" | "TAG:DURATION" | "tag:duration" | "TAG:duration" => {
+                    if let Some(d) = parse_time_val(v) {
                         if d > 0.0 {
                             durations.push(d);
                         }
@@ -244,21 +244,13 @@ pub fn parse_probe_output(out_str: &str) -> Result<(String, usize, usize, f32, u
         30.0
     };
 
-    let duration: f32 = durations.iter().copied().find(|&d| d > 0.0).unwrap_or(0.0);
+    let duration: f32 = durations.iter().copied().fold(0.0f32, f32::max);
 
-    let frame_count: usize = if nb_frames > 0 {
-        if duration > 0.0 && fps > 0.0 {
-            let estimated = (duration * fps).round() as usize;
-            if nb_frames >= estimated / 2 && nb_frames <= estimated.saturating_mul(2) + 10 {
-                nb_frames
-            } else {
-                estimated
-            }
-        } else {
-            nb_frames
-        }
-    } else if duration > 0.0 && fps > 0.0 {
-        (duration * fps).round() as usize
+    let frame_count: usize = if duration > 0.0 && fps > 0.0 {
+        let estimated = (duration * fps).round() as usize;
+        estimated.max(nb_frames).max(1)
+    } else if nb_frames > 0 {
+        nb_frames
     } else {
         1
     };
@@ -266,10 +258,27 @@ pub fn parse_probe_output(out_str: &str) -> Result<(String, usize, usize, f32, u
     let duration = if duration == 0.0 && frame_count > 0 && fps > 0.0 {
         frame_count as f32 / fps
     } else {
-        duration
+        duration.max(frame_count as f32 / fps)
     };
 
     Ok((codec, width, height, fps, frame_count, duration))
+}
+
+fn parse_time_val(s: &str) -> Option<f32> {
+    if let Ok(sec) = s.trim().parse::<f32>() {
+        if sec > 0.0 {
+            return Some(sec);
+        }
+    }
+    let parts: Vec<&str> = s.trim().split(':').collect();
+    if parts.len() == 3 {
+        let h: f32 = parts[0].trim().parse().ok()?;
+        let m: f32 = parts[1].trim().parse().ok()?;
+        let sec: f32 = parts[2].trim().parse().ok()?;
+        Some(h * 3600.0 + m * 60.0 + sec)
+    } else {
+        None
+    }
 }
 
 pub fn probe_video_metadata(path: &std::path::Path) -> Result<(String, usize, usize, f32, usize, f32), String> {
@@ -287,7 +296,7 @@ pub fn probe_video_metadata(path: &std::path::Path) -> Result<(String, usize, us
         .args(&[
             "-v", "error",
             "-select_streams", "v:0",
-            "-show_entries", "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,duration,nb_frames:format=duration",
+            "-show_entries", "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,duration,nb_frames:format=duration:stream_tags=DURATION,duration:format_tags=DURATION,duration",
             "-of", "default=noprint_wrappers=1",
         ])
         .arg(path);

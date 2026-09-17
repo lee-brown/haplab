@@ -1747,11 +1747,14 @@ impl eframe::App for HapLabApp {
 
                 // Scrubber slider across top of bottom panel
                 let old_frame = self.current_frame;
+                let avail_w = ui.available_width();
                 let slider = egui::Slider::new(&mut self.current_frame, 0..=max_frame)
                     .show_value(false)
                     .trailing_fill(true);
                 let slider_resp = ui.add_enabled_ui(has_video && count > 0, |ui| {
-                    ui.add_sized([ui.available_width(), 18.0], slider)
+                    ui.spacing_mut().slider_width = avail_w;
+                    ui.spacing_mut().interact_size.y = 18.0;
+                    ui.add(slider)
                 }).inner;
 
                 if has_video {
@@ -1956,10 +1959,66 @@ impl eframe::App for HapLabApp {
                             self.seek_to_frame(count.saturating_sub(1), &ctx);
                         }
 
-                        let loop_text = if self.loop_playback { "Loop: On" } else { "Loop: Off" };
-                        if ui.add(egui::Button::new(loop_text).min_size(Vec2::new(72.0, 26.0))).on_hover_text("Toggle Looping (L)").clicked() {
+                        let (loop_rect, loop_resp) = ui.allocate_exact_size(Vec2::new(32.0, 26.0), egui::Sense::click());
+                        if loop_resp.clicked() {
                             self.loop_playback = !self.loop_playback;
+                            self.notify(
+                                format!("Loop: {}", if self.loop_playback { "On" } else { "Off" }),
+                                colors::ACCENT_CYAN,
+                            );
                         }
+
+                        let loop_resp = loop_resp.on_hover_text(if self.loop_playback {
+                            "Looping: Enabled (L) - click to toggle"
+                        } else {
+                            "Looping: Disabled (L) - click to toggle"
+                        });
+
+                        let (loop_bg, loop_border, loop_icon) = if self.loop_playback {
+                            if loop_resp.hovered() {
+                                (Color32::from_rgb(55, 145, 255), Stroke::new(1.0, Color32::from_rgb(100, 185, 255)), Color32::WHITE)
+                            } else {
+                                (colors::ACCENT_BLUE, Stroke::new(1.0, Color32::from_rgb(70, 155, 245)), Color32::WHITE)
+                            }
+                        } else {
+                            if loop_resp.hovered() {
+                                (Color32::from_rgb(36, 42, 54), Stroke::new(1.0, Color32::from_rgb(52, 60, 78)), Color32::from_rgb(200, 210, 225))
+                            } else {
+                                (Color32::from_rgb(22, 26, 35), Stroke::new(1.0, Color32::from_rgb(38, 44, 58)), Color32::from_rgb(120, 130, 150))
+                            }
+                        };
+
+                        ui.painter().rect_filled(loop_rect, CornerRadius::same(5), loop_bg);
+                        ui.painter().rect_stroke(loop_rect, CornerRadius::same(5), loop_border, egui::StrokeKind::Inside);
+
+                        let lc = loop_rect.center();
+                        let l_stroke = Stroke::new(1.5, loop_icon);
+                        let top_y = lc.y - 4.0;
+                        let bot_y = lc.y + 4.0;
+
+                        // Top horizontal segment and right arrowhead
+                        ui.painter().line_segment([egui::pos2(lc.x - 3.5, top_y), egui::pos2(lc.x + 3.0, top_y)], l_stroke);
+                        let p_tip = egui::pos2(lc.x + 6.0, top_y);
+                        let p_top = egui::pos2(lc.x + 2.5, top_y - 3.0);
+                        let p_bot = egui::pos2(lc.x + 2.5, top_y + 3.0);
+                        ui.painter().add(egui::Shape::convex_polygon(vec![p_tip, p_top, p_bot], loop_icon, Stroke::NONE));
+
+                        // Right bend curving down to bottom
+                        ui.painter().line_segment([egui::pos2(lc.x + 2.0, top_y), egui::pos2(lc.x + 4.5, lc.y - 1.5)], l_stroke);
+                        ui.painter().line_segment([egui::pos2(lc.x + 4.5, lc.y - 1.5), egui::pos2(lc.x + 4.5, lc.y + 1.5)], l_stroke);
+                        ui.painter().line_segment([egui::pos2(lc.x + 4.5, lc.y + 1.5), egui::pos2(lc.x + 2.0, bot_y)], l_stroke);
+
+                        // Bottom horizontal segment and left arrowhead
+                        ui.painter().line_segment([egui::pos2(lc.x + 2.0, bot_y), egui::pos2(lc.x - 3.0, bot_y)], l_stroke);
+                        let q_tip = egui::pos2(lc.x - 6.0, bot_y);
+                        let q_top = egui::pos2(lc.x - 2.5, bot_y - 3.0);
+                        let q_bot = egui::pos2(lc.x - 2.5, bot_y + 3.0);
+                        ui.painter().add(egui::Shape::convex_polygon(vec![q_tip, q_top, q_bot], loop_icon, Stroke::NONE));
+
+                        // Left bend curving up to top
+                        ui.painter().line_segment([egui::pos2(lc.x - 2.0, bot_y), egui::pos2(lc.x - 4.5, lc.y + 1.5)], l_stroke);
+                        ui.painter().line_segment([egui::pos2(lc.x - 4.5, lc.y + 1.5), egui::pos2(lc.x - 4.5, lc.y - 1.5)], l_stroke);
+                        ui.painter().line_segment([egui::pos2(lc.x - 4.5, lc.y - 1.5), egui::pos2(lc.x - 2.0, top_y)], l_stroke);
                     } else if self.enc_input_path.is_some() {
                         // Background transcode in progress
                         if let Some(ref status) = self.enc_status {
