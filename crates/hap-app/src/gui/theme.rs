@@ -7,67 +7,67 @@ use std::path::Path;
 pub mod colors {
     use super::Color32;
 
-    pub const BG_APP: Color32 = Color32::from_rgb(15, 18, 24);
-    pub const BG_CARD: Color32 = Color32::from_rgb(24, 28, 38);
-    pub const BG_CARD_HOVER: Color32 = Color32::from_rgb(32, 38, 52);
-    pub const BG_ELEVATED: Color32 = Color32::from_rgb(20, 24, 34);
+    pub const BG_APP: Color32 = Color32::from_rgb(12, 12, 12);       // #0C0C0C leebrown.me base canvas
+    pub const BG_CARD: Color32 = Color32::from_rgb(20, 20, 20);      // #141414 leebrown.me elevated card surface
+    pub const BG_CARD_HOVER: Color32 = Color32::from_rgb(30, 30, 30); // #1E1E1E leebrown.me card hover
+    pub const BG_ELEVATED: Color32 = Color32::from_rgb(24, 24, 24);   // #181818 subtle elevation
 
-    pub const BORDER_SUBTLE: Color32 = Color32::from_rgb(40, 48, 64);
-    pub const BORDER_ACTIVE: Color32 = Color32::from_rgb(56, 189, 248);
+    pub const BORDER_SUBTLE: Color32 = Color32::from_rgb(30, 30, 30); // #1E1E1E leebrown.me divider rule
+    pub const BORDER_ACTIVE: Color32 = Color32::from_rgb(232, 54, 79); // #E8364F leebrown.me signature accent
 
-    pub const ACCENT_CYAN: Color32 = Color32::from_rgb(56, 189, 248);
-    pub const ACCENT_BLUE: Color32 = Color32::from_rgb(2, 132, 199);
-    pub const ACCENT_GREEN: Color32 = Color32::from_rgb(16, 185, 129);
+    pub const ACCENT_CYAN: Color32 = Color32::from_rgb(232, 54, 79);   // Map primary brand accent to #E8364F
+    pub const ACCENT_BLUE: Color32 = Color32::from_rgb(232, 54, 79);   // Map primary action buttons to #E8364F
+    pub const ACCENT_GREEN: Color32 = Color32::from_rgb(52, 211, 153); // Fresh mint green for smooth decode & success
     pub const ACCENT_AMBER: Color32 = Color32::from_rgb(245, 158, 11);
-    pub const ACCENT_RED: Color32 = Color32::from_rgb(239, 68, 68);
-    pub const ACCENT_PURPLE: Color32 = Color32::from_rgb(168, 85, 247);
+    pub const ACCENT_RED: Color32 = Color32::from_rgb(232, 54, 79);    // #E8364F signature crimson
+    pub const ACCENT_PURPLE: Color32 = Color32::from_rgb(217, 70, 239);
 
-    pub const TEXT_PRIMARY: Color32 = Color32::from_rgb(248, 250, 252);
-    pub const TEXT_MUTED: Color32 = Color32::from_rgb(148, 163, 184);
-    pub const TEXT_FAINT: Color32 = Color32::from_rgb(100, 116, 139);
+    pub const TEXT_PRIMARY: Color32 = Color32::from_rgb(232, 228, 223); // #E8E4DF leebrown.me primary text
+    pub const TEXT_MUTED: Color32 = Color32::from_rgb(138, 138, 138);   // #8A8A8A leebrown.me mid text
+    pub const TEXT_FAINT: Color32 = Color32::from_rgb(74, 74, 74);     // #4A4A4A leebrown.me dim text
 }
 
-/// Applies a cohesive, modern dark studio theme to the egui context.
+/// Applies a cohesive, modern dark studio theme to the egui context matching leebrown.me aesthetic.
 pub fn apply_studio_theme(ctx: &egui::Context) {
     let mut visuals = egui::Visuals::dark();
 
     visuals.panel_fill = colors::BG_APP;
     visuals.window_fill = colors::BG_CARD;
     visuals.faint_bg_color = colors::BG_ELEVATED;
-    visuals.extreme_bg_color = Color32::from_rgb(11, 13, 18);
-    visuals.code_bg_color = Color32::from_rgb(18, 22, 30);
+    visuals.extreme_bg_color = Color32::from_rgb(8, 8, 8);
+    visuals.code_bg_color = Color32::from_rgb(16, 16, 16);
 
-    visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(20, 24, 34);
-    visuals.widgets.noninteractive.bg_stroke = Stroke::NONE;
+    visuals.widgets.noninteractive.bg_fill = colors::BG_CARD;
+    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, colors::BORDER_SUBTLE);
     visuals.widgets.noninteractive.corner_radius = CornerRadius::same(6);
     visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, colors::TEXT_PRIMARY);
 
     visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
     visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-    visuals.widgets.inactive.bg_stroke = Stroke::NONE;
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, colors::BORDER_SUBTLE);
     visuals.widgets.inactive.corner_radius = CornerRadius::same(6);
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, colors::TEXT_PRIMARY);
 
     visuals.widgets.hovered.bg_fill = colors::BG_CARD_HOVER;
     visuals.widgets.hovered.weak_bg_fill = colors::BG_CARD_HOVER;
-    visuals.widgets.hovered.bg_stroke = Stroke::NONE;
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, colors::BORDER_SUBTLE);
     visuals.widgets.hovered.corner_radius = CornerRadius::same(6);
     visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::WHITE);
 
-    visuals.widgets.active.bg_fill = colors::ACCENT_BLUE;
-    visuals.widgets.active.weak_bg_fill = colors::ACCENT_BLUE;
-    visuals.widgets.active.bg_stroke = Stroke::NONE;
+    visuals.widgets.active.bg_fill = colors::ACCENT_RED;
+    visuals.widgets.active.weak_bg_fill = colors::ACCENT_RED;
+    visuals.widgets.active.bg_stroke = Stroke::new(1.0, colors::ACCENT_RED);
     visuals.widgets.active.corner_radius = CornerRadius::same(6);
     visuals.widgets.active.fg_stroke = Stroke::new(1.0, Color32::WHITE);
 
     visuals.widgets.open.bg_fill = colors::BG_CARD_HOVER;
     visuals.widgets.open.weak_bg_fill = colors::BG_CARD_HOVER;
-    visuals.widgets.open.bg_stroke = Stroke::NONE;
+    visuals.widgets.open.bg_stroke = Stroke::new(1.0, colors::BORDER_SUBTLE);
     visuals.widgets.open.corner_radius = CornerRadius::same(6);
 
-    visuals.selection.bg_fill = colors::ACCENT_BLUE;
+    visuals.selection.bg_fill = colors::ACCENT_RED;
     visuals.selection.stroke = Stroke::NONE;
-    visuals.window_stroke = Stroke::NONE;
+    visuals.window_stroke = Stroke::new(1.0, colors::BORDER_SUBTLE);
     visuals.window_corner_radius = CornerRadius::same(8);
 
     ctx.set_visuals(visuals);
@@ -116,7 +116,7 @@ pub fn setup_studio_fonts(ctx: &egui::Context) {
 
 /// Renders a subtle checkerboard pattern on the canvas for transparent textures.
 pub fn paint_transparency_checkerboard(painter: &Painter, rect: Rect) {
-    painter.rect_filled(rect, 0, Color32::from_rgb(20, 24, 32));
+    painter.rect_filled(rect, 0, Color32::from_rgb(14, 14, 14));
     let cell = 16.0;
     let mut y = rect.min.y;
     let mut row = 0;
@@ -127,7 +127,7 @@ pub fn paint_transparency_checkerboard(painter: &Painter, rect: Rect) {
                 egui::pos2(x, y),
                 Vec2::new(cell.min(rect.max.x - x), cell.min(rect.max.y - y)),
             );
-            painter.rect_filled(tile, 0, Color32::from_rgb(28, 34, 46));
+            painter.rect_filled(tile, 0, Color32::from_rgb(22, 22, 22));
             x += cell * 2.0;
         }
         y += cell;
@@ -135,7 +135,7 @@ pub fn paint_transparency_checkerboard(painter: &Painter, rect: Rect) {
     }
 }
 
-/// Renders a styled chip/badge pill.
+/// Renders a styled chip/badge pill with leebrown.me border and typography.
 pub fn render_badge(ui: &mut egui::Ui, text: &str, bg: Color32, fg: Color32) {
     let font_id = egui::TextStyle::Monospace.resolve(ui.style());
     let galley = ui.painter().layout_no_wrap(text.to_string(), font_id, fg);
@@ -144,6 +144,7 @@ pub fn render_badge(ui: &mut egui::Ui, text: &str, bg: Color32, fg: Color32) {
     let (rect, _response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
     if bg != Color32::TRANSPARENT {
         ui.painter().rect_filled(rect, CornerRadius::same(5), bg);
+        ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, colors::BORDER_SUBTLE), egui::StrokeKind::Inside);
     }
     let text_pos = rect.min + padding;
     ui.painter().galley(text_pos, galley, fg);
@@ -207,11 +208,11 @@ pub fn reveal_in_file_manager(path: &Path) {
     }
 }
 
-/// Paints a sophisticated, organic Apple-style ambient light glow effect with white and purple flares.
+/// Paints a sophisticated, organic ambient light glow effect with leebrown.me crimson and ivory flares.
 /// Uses GPU-interpolated radial gradient mesh fans for 60 FPS rendering with near-zero CPU cost.
 pub fn paint_ambient_glow(painter: &Painter, rect: Rect, time: f32, is_hovered: bool) {
-    // Fill base deep dark-matter canvas across the entire rect
-    painter.rect_filled(rect, 0.0, Color32::from_rgb(11, 13, 19));
+    // Fill base deep dark-matter canvas across the entire rect matching leebrown.me
+    painter.rect_filled(rect, 0.0, Color32::from_rgb(12, 12, 12));
 
     let cx = rect.center().x;
     let cy = rect.center().y;
@@ -256,31 +257,31 @@ pub fn paint_ambient_glow(painter: &Painter, rect: Rect, time: f32, is_hovered: 
     let hover_alpha_mult: f32 = if is_hovered { 1.4 } else { 1.0 };
     let total_scale = base_scale * hover_scale;
 
-    // 1. Deep Royal Purple / Electric Violet Glow
+    // 1. Signature Crimson Red Flare (#E8364F from leebrown.me)
     let p1_x = cx + (time * 0.45).sin() * 90.0;
     let p1_y = cy + (time * 0.35).cos() * 45.0;
     let r1 = (440.0 + (time * 0.8).sin() * 40.0) * total_scale;
     let a1 = ((48.0 * hover_alpha_mult).min(90.0)) as u8;
-    draw_flare(Pos2::new(p1_x, p1_y), r1, Color32::from_rgba_premultiplied(140, 50, 235, a1));
+    draw_flare(Pos2::new(p1_x, p1_y), r1, Color32::from_rgba_premultiplied(232, 54, 79, a1));
 
-    // 2. Secondary Warm Orchid / Vivid Magenta Flare
+    // 2. Secondary Warm Coral / Deep Ruby Flare
     let p2_x = cx - (time * 0.38).cos() * 100.0;
     let p2_y = cy - (time * 0.52).sin() * 50.0;
     let r2 = (380.0 + (time * 0.65).cos() * 30.0) * total_scale;
-    let a2 = ((40.0 * hover_alpha_mult).min(75.0)) as u8;
-    draw_flare(Pos2::new(p2_x, p2_y), r2, Color32::from_rgba_premultiplied(185, 65, 215, a2));
+    let a2 = ((36.0 * hover_alpha_mult).min(75.0)) as u8;
+    draw_flare(Pos2::new(p2_x, p2_y), r2, Color32::from_rgba_premultiplied(190, 40, 65, a2));
 
-    // 3. Apple-style Ethereal Moon-White Light Flare (Subtle Core)
+    // 3. Warm Ivory Flare (leebrown.me #E8E4DF Moonlight Core)
     let p3_x = cx + (time * 0.6).cos() * 38.0;
     let p3_y = cy + (time * 0.7).sin() * 26.0;
     let r3 = (240.0 + (time * 1.1).sin() * 25.0) * total_scale;
-    let a3 = ((44.0 * hover_alpha_mult).min(80.0)) as u8;
-    draw_flare(Pos2::new(p3_x, p3_y), r3, Color32::from_rgba_premultiplied(235, 240, 255, a3));
+    let a3 = ((40.0 * hover_alpha_mult).min(75.0)) as u8;
+    draw_flare(Pos2::new(p3_x, p3_y), r3, Color32::from_rgba_premultiplied(232, 228, 223, a3));
 
-    // 4. Soft Indigo / Deep Azure Ambient Halo
+    // 4. Subtle Ambient Ruby Halo
     let p4_x = cx + (time * 0.25).sin() * 120.0;
     let p4_y = cy - (time * 0.3).cos() * 50.0;
     let r4 = 520.0 * total_scale;
-    let a4 = ((25.0 * hover_alpha_mult).min(50.0)) as u8;
-    draw_flare(Pos2::new(p4_x, p4_y), r4, Color32::from_rgba_premultiplied(85, 55, 210, a4));
+    let a4 = ((22.0 * hover_alpha_mult).min(45.0)) as u8;
+    draw_flare(Pos2::new(p4_x, p4_y), r4, Color32::from_rgba_premultiplied(140, 25, 45, a4));
 }

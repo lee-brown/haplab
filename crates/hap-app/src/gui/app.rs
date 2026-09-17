@@ -1488,12 +1488,12 @@ impl eframe::App for HapLabApp {
         // ===================================================================
         let menu_frame = if has_media {
             egui::Frame::new()
-                .fill(Color32::from_rgba_premultiplied(18, 22, 32, 225))
+                .fill(Color32::from_rgba_premultiplied(12, 12, 12, 235))
                 .stroke(Stroke::NONE)
                 .inner_margin(egui::Margin::symmetric(14, 6))
         } else {
             egui::Frame::new()
-                .fill(Color32::from_rgba_premultiplied(12, 15, 22, 150))
+                .fill(Color32::from_rgba_premultiplied(12, 12, 12, 160))
                 .stroke(Stroke::NONE)
                 .inner_margin(egui::Margin::symmetric(14, 7))
         };
@@ -1754,12 +1754,12 @@ impl eframe::App for HapLabApp {
         // ===================================================================
         let transport_frame = if has_media {
             egui::Frame::new()
-                .fill(Color32::from_rgba_premultiplied(16, 20, 30, 215)) // Frosted translucent dark glass
+                .fill(Color32::from_rgba_premultiplied(12, 12, 12, 235)) // leebrown.me #0c0c0c obsidian
                 .stroke(Stroke::NONE)
                 .inner_margin(egui::Margin::symmetric(18, 8))
         } else {
             egui::Frame::new()
-                .fill(Color32::from_rgba_premultiplied(14, 18, 26, 175)) // Translucent glass showing ambient glow
+                .fill(Color32::from_rgba_premultiplied(12, 12, 12, 160)) // Translucent obsidian showing ambient glow
                 .stroke(Stroke::NONE)
                 .inner_margin(egui::Margin::symmetric(18, 8))
         };
@@ -1928,10 +1928,10 @@ impl eframe::App for HapLabApp {
                         if s_resp.clicked() && count > 0 {
                             self.seek_to_frame(0, &ctx);
                         }
-                        let s_bg = if s_resp.hovered() && count > 0 { Color32::from_rgb(36, 42, 54) } else { Color32::from_rgb(22, 26, 35) };
-                        let s_icon = if count > 0 { if s_resp.hovered() { Color32::WHITE } else { Color32::from_rgb(200, 210, 225) } } else { Color32::from_rgb(70, 78, 95) };
+                        let s_bg = if s_resp.hovered() && count > 0 { colors::BG_CARD_HOVER } else { colors::BG_CARD };
+                        let s_icon = if count > 0 { if s_resp.hovered() { Color32::WHITE } else { colors::TEXT_PRIMARY } } else { colors::TEXT_FAINT };
                         ui.painter().rect_filled(s_rect, CornerRadius::same(5), s_bg);
-                        ui.painter().rect_stroke(s_rect, CornerRadius::same(5), Stroke::new(1.0, Color32::from_rgb(38, 44, 58)), egui::StrokeKind::Inside);
+                        ui.painter().rect_stroke(s_rect, CornerRadius::same(5), Stroke::new(1.0, colors::BORDER_SUBTLE), egui::StrokeKind::Inside);
                         let sc = s_rect.center();
                         ui.painter().rect_filled(Rect::from_center_size(egui::pos2(sc.x - 4.5, sc.y), Vec2::new(2.0, 10.0)), CornerRadius::same(1), s_icon);
                         let sp0 = egui::pos2(sc.x - 3.5, sc.y);
@@ -1945,10 +1945,10 @@ impl eframe::App for HapLabApp {
                         if r10_resp.clicked() && count > 0 {
                             self.seek_to_frame(self.current_frame.saturating_sub(10), &ctx);
                         }
-                        let r10_bg = if r10_resp.hovered() && count > 0 { Color32::from_rgb(36, 42, 54) } else { Color32::from_rgb(22, 26, 35) };
-                        let r10_icon = if count > 0 { if r10_resp.hovered() { Color32::WHITE } else { Color32::from_rgb(200, 210, 225) } } else { Color32::from_rgb(70, 78, 95) };
+                        let r10_bg = if r10_resp.hovered() && count > 0 { colors::BG_CARD_HOVER } else { colors::BG_CARD };
+                        let r10_icon = if count > 0 { if r10_resp.hovered() { Color32::WHITE } else { colors::TEXT_PRIMARY } } else { colors::TEXT_FAINT };
                         ui.painter().rect_filled(r10_rect, CornerRadius::same(5), r10_bg);
-                        ui.painter().rect_stroke(r10_rect, CornerRadius::same(5), Stroke::new(1.0, Color32::from_rgb(38, 44, 58)), egui::StrokeKind::Inside);
+                        ui.painter().rect_stroke(r10_rect, CornerRadius::same(5), Stroke::new(1.0, colors::BORDER_SUBTLE), egui::StrokeKind::Inside);
                         let r10_c = r10_rect.center();
                         let a0 = egui::pos2(r10_c.x - 5.0, r10_c.y);
                         let a1 = egui::pos2(r10_c.x - 0.5, r10_c.y - 4.5);
@@ -1965,10 +1965,10 @@ impl eframe::App for HapLabApp {
                         if r1_resp.clicked() && count > 0 {
                             self.seek_to_frame(self.current_frame.saturating_sub(1), &ctx);
                         }
-                        let r1_bg = if r1_resp.hovered() && count > 0 { Color32::from_rgb(36, 42, 54) } else { Color32::from_rgb(22, 26, 35) };
-                        let r1_icon = if count > 0 { if r1_resp.hovered() { Color32::WHITE } else { Color32::from_rgb(200, 210, 225) } } else { Color32::from_rgb(70, 78, 95) };
+                        let r1_bg = if r1_resp.hovered() && count > 0 { colors::BG_CARD_HOVER } else { colors::BG_CARD };
+                        let r1_icon = if count > 0 { if r1_resp.hovered() { Color32::WHITE } else { colors::TEXT_PRIMARY } } else { colors::TEXT_FAINT };
                         ui.painter().rect_filled(r1_rect, CornerRadius::same(5), r1_bg);
-                        ui.painter().rect_stroke(r1_rect, CornerRadius::same(5), Stroke::new(1.0, Color32::from_rgb(38, 44, 58)), egui::StrokeKind::Inside);
+                        ui.painter().rect_stroke(r1_rect, CornerRadius::same(5), Stroke::new(1.0, colors::BORDER_SUBTLE), egui::StrokeKind::Inside);
                         let r1_c = r1_rect.center();
                         let c0 = egui::pos2(r1_c.x - 3.5, r1_c.y);
                         let c1 = egui::pos2(r1_c.x + 3.0, r1_c.y - 5.0);
@@ -1982,18 +1982,10 @@ impl eframe::App for HapLabApp {
                             self.toggle_playback(&ctx);
                         }
 
-                        let bg_color = if self.is_playing {
-                            if btn_resp.hovered() {
-                                Color32::from_rgb(235, 165, 45)
-                            } else {
-                                colors::ACCENT_AMBER
-                            }
+                        let bg_color = if btn_resp.hovered() {
+                            Color32::from_rgb(245, 75, 95)
                         } else {
-                            if btn_resp.hovered() {
-                                Color32::from_rgb(60, 155, 255)
-                            } else {
-                                colors::ACCENT_BLUE
-                            }
+                            colors::ACCENT_RED
                         };
                         ui.painter().rect_filled(btn_rect, CornerRadius::same(5), bg_color);
 
@@ -2033,10 +2025,10 @@ impl eframe::App for HapLabApp {
                         if f1_resp.clicked() && count > 0 {
                             self.seek_to_frame(self.current_frame + 1, &ctx);
                         }
-                        let f1_bg = if f1_resp.hovered() && count > 0 { Color32::from_rgb(36, 42, 54) } else { Color32::from_rgb(22, 26, 35) };
-                        let f1_icon = if count > 0 { if f1_resp.hovered() { Color32::WHITE } else { Color32::from_rgb(200, 210, 225) } } else { Color32::from_rgb(70, 78, 95) };
+                        let f1_bg = if f1_resp.hovered() && count > 0 { colors::BG_CARD_HOVER } else { colors::BG_CARD };
+                        let f1_icon = if count > 0 { if f1_resp.hovered() { Color32::WHITE } else { colors::TEXT_PRIMARY } } else { colors::TEXT_FAINT };
                         ui.painter().rect_filled(f1_rect, CornerRadius::same(5), f1_bg);
-                        ui.painter().rect_stroke(f1_rect, CornerRadius::same(5), Stroke::new(1.0, Color32::from_rgb(38, 44, 58)), egui::StrokeKind::Inside);
+                        ui.painter().rect_stroke(f1_rect, CornerRadius::same(5), Stroke::new(1.0, colors::BORDER_SUBTLE), egui::StrokeKind::Inside);
                         let f1_c = f1_rect.center();
                         let d0 = egui::pos2(f1_c.x + 3.5, f1_c.y);
                         let d1 = egui::pos2(f1_c.x - 3.0, f1_c.y - 5.0);
@@ -2049,10 +2041,10 @@ impl eframe::App for HapLabApp {
                         if f10_resp.clicked() && count > 0 {
                             self.seek_to_frame(self.current_frame + 10, &ctx);
                         }
-                        let f10_bg = if f10_resp.hovered() && count > 0 { Color32::from_rgb(36, 42, 54) } else { Color32::from_rgb(22, 26, 35) };
-                        let f10_icon = if count > 0 { if f10_resp.hovered() { Color32::WHITE } else { Color32::from_rgb(200, 210, 225) } } else { Color32::from_rgb(70, 78, 95) };
+                        let f10_bg = if f10_resp.hovered() && count > 0 { colors::BG_CARD_HOVER } else { colors::BG_CARD };
+                        let f10_icon = if count > 0 { if f10_resp.hovered() { Color32::WHITE } else { colors::TEXT_PRIMARY } } else { colors::TEXT_FAINT };
                         ui.painter().rect_filled(f10_rect, CornerRadius::same(5), f10_bg);
-                        ui.painter().rect_stroke(f10_rect, CornerRadius::same(5), Stroke::new(1.0, Color32::from_rgb(38, 44, 58)), egui::StrokeKind::Inside);
+                        ui.painter().rect_stroke(f10_rect, CornerRadius::same(5), Stroke::new(1.0, colors::BORDER_SUBTLE), egui::StrokeKind::Inside);
                         let f10_c = f10_rect.center();
                         let e0 = egui::pos2(f10_c.x - 0.5, f10_c.y);
                         let e1 = egui::pos2(f10_c.x - 5.0, f10_c.y - 4.5);
@@ -2069,10 +2061,10 @@ impl eframe::App for HapLabApp {
                         if e_resp.clicked() && count > 0 {
                             self.seek_to_frame(count.saturating_sub(1), &ctx);
                         }
-                        let e_bg = if e_resp.hovered() && count > 0 { Color32::from_rgb(36, 42, 54) } else { Color32::from_rgb(22, 26, 35) };
-                        let e_icon = if count > 0 { if e_resp.hovered() { Color32::WHITE } else { Color32::from_rgb(200, 210, 225) } } else { Color32::from_rgb(70, 78, 95) };
+                        let e_bg = if e_resp.hovered() && count > 0 { colors::BG_CARD_HOVER } else { colors::BG_CARD };
+                        let e_icon = if count > 0 { if e_resp.hovered() { Color32::WHITE } else { colors::TEXT_PRIMARY } } else { colors::TEXT_FAINT };
                         ui.painter().rect_filled(e_rect, CornerRadius::same(5), e_bg);
-                        ui.painter().rect_stroke(e_rect, CornerRadius::same(5), Stroke::new(1.0, Color32::from_rgb(38, 44, 58)), egui::StrokeKind::Inside);
+                        ui.painter().rect_stroke(e_rect, CornerRadius::same(5), Stroke::new(1.0, colors::BORDER_SUBTLE), egui::StrokeKind::Inside);
                         let ec = e_rect.center();
                         let h0 = egui::pos2(ec.x + 3.5, ec.y);
                         let h1 = egui::pos2(ec.x - 3.5, ec.y - 4.5);
@@ -2098,15 +2090,15 @@ impl eframe::App for HapLabApp {
 
                         let (loop_bg, loop_border, loop_icon) = if self.loop_playback {
                             if loop_resp.hovered() {
-                                (Color32::from_rgb(55, 145, 255), Stroke::new(1.0, Color32::from_rgb(100, 185, 255)), Color32::WHITE)
+                                (Color32::from_rgb(245, 75, 95), Stroke::new(1.0, Color32::from_rgb(255, 110, 130)), Color32::WHITE)
                             } else {
-                                (colors::ACCENT_BLUE, Stroke::new(1.0, Color32::from_rgb(70, 155, 245)), Color32::WHITE)
+                                (colors::ACCENT_RED, Stroke::new(1.0, colors::ACCENT_RED), Color32::WHITE)
                             }
                         } else {
                             if loop_resp.hovered() {
-                                (Color32::from_rgb(36, 42, 54), Stroke::new(1.0, Color32::from_rgb(52, 60, 78)), Color32::from_rgb(200, 210, 225))
+                                (colors::BG_CARD_HOVER, Stroke::new(1.0, colors::BORDER_SUBTLE), Color32::WHITE)
                             } else {
-                                (Color32::from_rgb(22, 26, 35), Stroke::new(1.0, Color32::from_rgb(38, 44, 58)), Color32::from_rgb(120, 130, 150))
+                                (colors::BG_CARD, Stroke::new(1.0, colors::BORDER_SUBTLE), colors::TEXT_MUTED)
                             }
                         };
 
@@ -2370,7 +2362,7 @@ impl eframe::App for HapLabApp {
                                 paint_transparency_checkerboard(ui.painter(), rect);
                             }
                             BackgroundViewMode::Dark => {
-                                ui.painter().rect_filled(rect, 0, Color32::from_rgb(12, 14, 18));
+                                ui.painter().rect_filled(rect, 0, Color32::from_rgb(12, 12, 12));
                             }
                             BackgroundViewMode::Light => {
                                 ui.painter().rect_filled(rect, 0, Color32::from_rgb(180, 185, 195));
@@ -2396,7 +2388,13 @@ impl eframe::App for HapLabApp {
                             ui.painter().rect_filled(
                                 hud_rect,
                                 CornerRadius::same(6),
-                                Color32::from_rgba_premultiplied(16, 20, 28, 220),
+                                Color32::from_rgba_premultiplied(16, 16, 16, 230),
+                            );
+                            ui.painter().rect_stroke(
+                                hud_rect,
+                                CornerRadius::same(6),
+                                Stroke::new(1.0, colors::BORDER_SUBTLE),
+                                egui::StrokeKind::Inside,
                             );
 
                             let mut hud_ui = ui.new_child(
@@ -2411,8 +2409,13 @@ impl eframe::App for HapLabApp {
                                     ui.label(RichText::new(format!("{}x{}", r.width(), r.height())).color(colors::TEXT_PRIMARY).size(12.0));
                                 });
                                 hud_ui.add_space(4.0);
-                                let instant_fps = if self.last_decode_ms > 0.0 { 1000.0 / self.last_decode_ms } else { 0.0 };
-                                hud_ui.label(RichText::new(format!("Decode: {:.2} ms (~{:.0} FPS)", self.last_decode_ms, instant_fps)).color(colors::ACCENT_GREEN).size(11.5));
+                                let budget_ms = 1000.0 / r.fps().max(1.0);
+                                let decode_color = if self.last_decode_ms <= budget_ms {
+                                    colors::ACCENT_GREEN
+                                } else {
+                                    colors::ACCENT_RED
+                                };
+                                hud_ui.label(RichText::new(format!("Decode: {:.2} ms", self.last_decode_ms)).color(decode_color).size(11.5));
 
                                 if let Some(ref s) = self.stream_summary {
                                     hud_ui.label(RichText::new(format!("Bitrate: {:.2} Mbps | Frame: {}", s.avg_bitrate_mbps, format_bytes(self.last_packet_bytes as u64))).color(colors::TEXT_MUTED).size(11.0));
@@ -2458,7 +2461,13 @@ impl eframe::App for HapLabApp {
                     ui.painter().rect_filled(
                         loading_rect,
                         CornerRadius::same(10),
-                        Color32::from_rgba_premultiplied(18, 22, 32, 230),
+                        Color32::from_rgba_premultiplied(16, 16, 16, 240),
+                    );
+                    ui.painter().rect_stroke(
+                        loading_rect,
+                        CornerRadius::same(10),
+                        Stroke::new(1.0, colors::BORDER_SUBTLE),
+                        egui::StrokeKind::Inside,
                     );
                     let mut loading_ui = ui.new_child(
                         egui::UiBuilder::new()
@@ -2470,7 +2479,7 @@ impl eframe::App for HapLabApp {
                     loading_ui.label(
                         RichText::new(format!("Loading {}...", self.loading_filename))
                             .size(13.0)
-                            .color(Color32::WHITE)
+                            .color(colors::TEXT_PRIMARY)
                             .strong(),
                     );
                 }
@@ -2502,283 +2511,296 @@ impl HapLabApp {
             .default_height(550.0)
             .resizable(true)
             .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    // Source Media Card
-                    let input_frame = egui::Frame::new()
-                        .fill(colors::BG_CARD)
-                        .stroke(Stroke::NONE)
-                        .corner_radius(CornerRadius::same(6))
-                        .inner_margin(egui::Margin::same(14));
+                // Fixed Bottom Bar: Actions & Progress Bar (Pinned so user never has to scroll)
+                egui::Panel::bottom("transcode_bottom_bar")
+                    .show_separator_line(true)
+                    .frame(
+                        egui::Frame::new()
+                            .fill(colors::BG_CARD)
+                            .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
+                            .inner_margin(egui::Margin::symmetric(14, 10))
+                    )
+                    .show(ui, |ui| {
+                        let can_start = self.enc_input_path.is_some()
+                            && self.enc_output_path.is_some()
+                            && self.enc_detected_frames > 0
+                            && self.enc_rx.is_none();
 
-                    input_frame.show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.strong(RichText::new("Source Media").size(14.0));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.button("Select Video / File...").clicked() {
-                                    if let Some(file) = rfd::FileDialog::new()
-                                        .add_filter("All Supported Media", &["mp4", "mov", "mkv", "avi", "webm", "m4v", "mxf", "ts", "wmv", "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
-                                        .pick_file()
-                                    {
-                                        self.open_media_file(file, ctx);
+                            let encode_btn = egui::Button::new(RichText::new("Start Transcoding").size(14.0).strong())
+                                .min_size(Vec2::new(160.0, 36.0))
+                                .fill(colors::ACCENT_BLUE)
+                                .corner_radius(CornerRadius::same(6));
+
+                            if ui.add_enabled(can_start, encode_btn).clicked() {
+                                if let (Some(ref in_p), Some(ref out_p)) = (&self.enc_input_path, &self.enc_output_path) {
+                                    let cancel_flag = Arc::new(AtomicBool::new(false));
+                                    let (tx, rx) = crossbeam_channel::unbounded();
+                                    self.enc_rx = Some(rx);
+                                    self.enc_cancel = Some(cancel_flag.clone());
+                                    self.enc_start_time = Some(Instant::now());
+
+                                    let cfg = EncodeJobConfig {
+                                        input_dir: in_p.clone(),
+                                        output_file: out_p.clone(),
+                                        format: self.enc_format,
+                                        fps: self.enc_fps,
+                                        chunks: self.enc_chunks,
+                                        snappy: self.enc_snappy,
+                                        color_range: self.enc_color_range,
+                                        alpha_mode: self.enc_alpha_mode,
+                                        dither_mode: self.enc_dither_mode,
+                                        quality: self.enc_quality,
+                                        video_dimensions: if self.enc_detected_w > 0 && self.enc_detected_h > 0 {
+                                            Some((self.enc_detected_w as usize, self.enc_detected_h as usize))
+                                        } else {
+                                            None
+                                        },
+                                        total_frames: if self.enc_detected_frames > 0 {
+                                            Some(self.enc_detected_frames)
+                                        } else {
+                                            None
+                                        },
+                                    };
+
+                                    self.log(&format!("Started transcode: {:?} -> {:?}", in_p, out_p));
+                                    spawn_encode_worker(cfg, cancel_flag, tx);
+                                }
+                            }
+
+                            if self.enc_rx.is_some() {
+                                let cancel_btn = egui::Button::new(RichText::new("Cancel").size(14.0).color(colors::ACCENT_RED))
+                                    .min_size(Vec2::new(90.0, 36.0));
+                                if ui.add(cancel_btn).clicked() {
+                                    if let Some(ref cancel) = self.enc_cancel {
+                                        cancel.store(true, Ordering::Relaxed);
                                     }
                                 }
-                                if ui.button("Choose Folder...").clicked() {
-                                    if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                                        self.open_media_file(folder, ctx);
-                                    }
-                                }
-                            });
+                            }
                         });
 
-                        ui.add_space(6.0);
-
-                        if let Some(ref path) = self.enc_input_path {
-                            ui.horizontal(|ui| {
-                                if let Some(ref thumb) = self.enc_thumbnail_texture {
-                                    let tsz = thumb.size_vec2();
-                                    let t_aspect = if tsz.y > 0.0 { tsz.x / tsz.y } else { 1.0 };
-                                    let (tw, th) = if t_aspect >= 1.0 {
-                                        (72.0, (72.0 / t_aspect).max(18.0))
-                                    } else {
-                                        ((72.0 * t_aspect).max(18.0), 72.0)
-                                    };
-                                    let (rect, _) = ui.allocate_exact_size(Vec2::new(tw, th), egui::Sense::hover());
-                                    paint_transparency_checkerboard(ui.painter(), rect);
-                                    ui.painter().image(thumb.id(), rect, Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                        // Live Progress Bar
+                        if let Some(ref status) = self.enc_status {
+                            ui.add_space(8.0);
+                            match status {
+                                WorkerProgress::Started { total } => {
+                                    ui.label(format!("Starting transcode: {} frames...", total));
                                 }
-                                ui.vertical(|ui| {
-                                    ui.monospace(format!("Path: {}", path.display()));
-                                    ui.add_space(4.0);
+                                WorkerProgress::Progress { current, total, fps, percent } => {
+                                    ui.vertical(|ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label(format!("Transcoding: {}/{} frames ({:.1}%)", current, total, percent));
+                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                ui.monospace(format!("{:.1} FPS", fps));
+                                            });
+                                        });
+                                        ui.add(egui::ProgressBar::new(*percent / 100.0).show_percentage());
+                                    });
+                                }
+                                WorkerProgress::Finished { message } => {
                                     ui.horizontal(|ui| {
-                                        if let Some(ref codec) = self.enc_detected_codec {
-                                            render_badge(ui, codec, colors::BG_ELEVATED, colors::ACCENT_CYAN);
+                                        ui.label(RichText::new(message).color(colors::ACCENT_GREEN).strong());
+                                        if let Some(ref out_mov) = self.enc_last_successful_mov {
+                                            if ui.button("Reveal in File Manager").clicked() {
+                                                reveal_in_file_manager(out_mov);
+                                            }
                                         }
-                                        render_badge(ui, &format!("{} frames", self.enc_detected_frames), colors::BG_ELEVATED, colors::TEXT_PRIMARY);
-                                        render_badge(ui, &format!("{}x{}", self.enc_detected_w, self.enc_detected_h), colors::BG_ELEVATED, colors::TEXT_PRIMARY);
+                                    });
+                                }
+                                WorkerProgress::Error(err) => {
+                                    ui.label(RichText::new(format!("Error: {}", err)).color(colors::ACCENT_RED).strong());
+                                }
+                            }
+                        }
+                    });
+
+                // Scrollable Central Area for Media Configuration
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::new().fill(Color32::TRANSPARENT).inner_margin(egui::Margin::ZERO))
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            // Source Media Card
+                            let input_frame = egui::Frame::new()
+                                .fill(colors::BG_CARD)
+                                .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
+                                .corner_radius(CornerRadius::same(6))
+                                .inner_margin(egui::Margin::same(14));
+
+                            input_frame.show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.strong(RichText::new("Source Media").size(14.0));
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        if ui.button("Select Video / File...").clicked() {
+                                            if let Some(file) = rfd::FileDialog::new()
+                                                .add_filter("All Supported Media", &["mp4", "mov", "mkv", "avi", "webm", "m4v", "mxf", "ts", "wmv", "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
+                                                .pick_file()
+                                            {
+                                                self.open_media_file(file, ctx);
+                                            }
+                                        }
+                                        if ui.button("Choose Folder...").clicked() {
+                                            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                                                self.open_media_file(folder, ctx);
+                                            }
+                                        }
                                     });
                                 });
-                            });
-                        } else {
-                            ui.label(RichText::new("No input loaded. Select a file or folder above.").color(colors::TEXT_MUTED));
-                        }
-                    });
 
-                    ui.add_space(10.0);
+                                ui.add_space(6.0);
 
-                    // Presets
-                    ui.strong(RichText::new("Presets").size(14.0));
-                    ui.add_space(6.0);
-                    ui.horizontal_wrapped(|ui| {
-                        let presets = [
-                            EncoderPreset::HapQRecommended,
-                            EncoderPreset::HapRUltra,
-                            EncoderPreset::HapQAlphaTransparent,
-                            EncoderPreset::Hap1Fast,
-                            EncoderPreset::HapAlphaLight,
-                            EncoderPreset::Custom,
-                        ];
-                        for preset in presets {
-                            let is_sel = self.enc_preset == preset;
-                            let bg = if is_sel { colors::ACCENT_BLUE } else { colors::BG_ELEVATED };
-                            let btn = egui::Button::new(RichText::new(preset.name()).size(13.0).color(if is_sel { Color32::WHITE } else { colors::TEXT_MUTED }).strong())
-                                .min_size(Vec2::new(100.0, 32.0))
-                                .fill(bg)
-                                .stroke(Stroke::NONE)
-                                .corner_radius(CornerRadius::same(5));
-                            if ui.add(btn).clicked() {
-                                self.apply_preset(preset);
-                            }
-                        }
-                    });
-
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(self.enc_preset.description()).color(colors::TEXT_MUTED).size(11.5));
-                    ui.add_space(10.0);
-
-                    // Codec Settings Grid
-                    egui::Grid::new("transcode_params_grid").spacing([24.0, 10.0]).show(ui, |ui| {
-                        ui.label(RichText::new("Format:").color(colors::TEXT_MUTED));
-                        egui::ComboBox::from_id_salt("flavour_combo")
-                            .selected_text(self.enc_format.name())
-                            .show_ui(ui, |ui| {
-                                let old_f = self.enc_format;
-                                ui.selectable_value(&mut self.enc_format, HapFormat::HapY, "Hap Q (Scaled YCoCg)");
-                                ui.selectable_value(&mut self.enc_format, HapFormat::Hap7, "Hap R (BC7)");
-                                ui.selectable_value(&mut self.enc_format, HapFormat::HapM, "Hap Q Alpha (Color + Alpha)");
-                                ui.selectable_value(&mut self.enc_format, HapFormat::Hap1, "Hap 1 (DXT1)");
-                                ui.selectable_value(&mut self.enc_format, HapFormat::Hap5, "Hap Alpha (DXT5)");
-                                ui.selectable_value(&mut self.enc_format, HapFormat::HapA, "Hap Alpha-Only (BC4)");
-                                if old_f != self.enc_format {
-                                    self.enc_preset = EncoderPreset::Custom;
-                                    self.update_suggested_output_filename();
-                                }
-                            });
-                        ui.end_row();
-
-                        ui.label(RichText::new("Frame Rate:").color(colors::TEXT_MUTED));
-                        ui.horizontal(|ui| {
-                            ui.add(egui::DragValue::new(&mut self.enc_fps).speed(0.1).range(1.0..=120.0));
-                            for f in [24.0, 25.0, 30.0, 60.0] {
-                                if ui.button(format!("{:.0}", f)).clicked() {
-                                    self.enc_fps = f;
-                                }
-                            }
-                        });
-                        ui.end_row();
-
-                        ui.label(RichText::new("Chunks & Compression:").color(colors::TEXT_MUTED));
-                        ui.horizontal(|ui| {
-                            egui::ComboBox::from_id_salt("chunks_picker_box")
-                                .selected_text(format!("{} Chunks", self.enc_chunks))
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut self.enc_chunks, 1, "1 Chunk");
-                                    ui.selectable_value(&mut self.enc_chunks, 2, "2 Chunks");
-                                    ui.selectable_value(&mut self.enc_chunks, 4, "4 Chunks");
-                                    ui.selectable_value(&mut self.enc_chunks, 8, "8 Chunks");
-                                    ui.selectable_value(&mut self.enc_chunks, 16, "16 Chunks");
-                                });
-                            ui.checkbox(&mut self.enc_snappy, "Snappy Compression");
-                        });
-                        ui.end_row();
-
-                        ui.label(RichText::new("Color Levels:").color(colors::TEXT_MUTED));
-                        egui::ComboBox::from_id_salt("color_range_combo")
-                            .selected_text(match self.enc_color_range {
-                                ColorRange::Full => "Full Range (0-255 PC / Graphics)",
-                                ColorRange::Limited => "Limited Range (16-235 Studio Video -> Expand)",
-                            })
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut self.enc_color_range, ColorRange::Full, "Full Range (0-255 PC / Graphics / Unreal)");
-                                ui.selectable_value(&mut self.enc_color_range, ColorRange::Limited, "Limited Range (16-235 Studio Video -> Expand to 0-255)");
-                            });
-                        ui.end_row();
-
-                        ui.label(RichText::new("Quality Preset:").color(colors::TEXT_MUTED));
-                        egui::ComboBox::from_id_salt("quality_combo")
-                            .selected_text(match self.enc_quality {
-                                QualityPreset::Production => "Production Master (ClusterFit, Best Quality)",
-                                QualityPreset::Draft => "Draft / Rush (RangeFit, ~3x Faster)",
-                            })
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut self.enc_quality, QualityPreset::Production, "Production Master (ClusterFit, Optimal RMS error)");
-                                ui.selectable_value(&mut self.enc_quality, QualityPreset::Draft, "Draft / Rush (RangeFit, Real-time fast ingest)");
-                            });
-                        ui.end_row();
-
-                        ui.label(RichText::new("Output Destination:").color(colors::TEXT_MUTED));
-                        ui.horizontal(|ui| {
-                            if let Some(ref out) = self.enc_output_path {
-                                ui.monospace(format!("{}", out.display()));
-                            } else {
-                                ui.label(RichText::new("Not set").color(colors::TEXT_FAINT));
-                            }
-                            if ui.button("Change...").clicked() {
-                                if let Some(dest) = rfd::FileDialog::new()
-                                    .add_filter("QuickTime Movie", &["mov"])
-                                    .save_file()
-                                {
-                                    self.enc_output_path = Some(dest);
-                                }
-                            }
-                        });
-                        ui.end_row();
-                    });
-
-                    ui.add_space(14.0);
-
-                    // Actions & Progress Bar
-                    let can_start = self.enc_input_path.is_some()
-                        && self.enc_output_path.is_some()
-                        && self.enc_detected_frames > 0
-                        && self.enc_rx.is_none();
-
-                    ui.horizontal(|ui| {
-                        let encode_btn = egui::Button::new(RichText::new("Start Transcoding").size(14.0).strong())
-                            .min_size(Vec2::new(160.0, 36.0))
-                            .fill(colors::ACCENT_BLUE)
-                            .corner_radius(CornerRadius::same(6));
-
-                        if ui.add_enabled(can_start, encode_btn).clicked() {
-                            if let (Some(ref in_p), Some(ref out_p)) = (&self.enc_input_path, &self.enc_output_path) {
-                                let cancel_flag = Arc::new(AtomicBool::new(false));
-                                let (tx, rx) = crossbeam_channel::unbounded();
-                                self.enc_rx = Some(rx);
-                                self.enc_cancel = Some(cancel_flag.clone());
-                                self.enc_start_time = Some(Instant::now());
-
-                                let cfg = EncodeJobConfig {
-                                    input_dir: in_p.clone(),
-                                    output_file: out_p.clone(),
-                                    format: self.enc_format,
-                                    fps: self.enc_fps,
-                                    chunks: self.enc_chunks,
-                                    snappy: self.enc_snappy,
-                                    color_range: self.enc_color_range,
-                                    alpha_mode: self.enc_alpha_mode,
-                                    dither_mode: self.enc_dither_mode,
-                                    quality: self.enc_quality,
-                                    video_dimensions: if self.enc_detected_w > 0 && self.enc_detected_h > 0 {
-                                        Some((self.enc_detected_w as usize, self.enc_detected_h as usize))
-                                    } else {
-                                        None
-                                    },
-                                    total_frames: if self.enc_detected_frames > 0 {
-                                        Some(self.enc_detected_frames)
-                                    } else {
-                                        None
-                                    },
-                                };
-
-                                self.log(&format!("Started transcode: {:?} -> {:?}", in_p, out_p));
-                                spawn_encode_worker(cfg, cancel_flag, tx);
-                            }
-                        }
-
-                        if self.enc_rx.is_some() {
-                            let cancel_btn = egui::Button::new(RichText::new("Cancel").size(14.0).color(colors::ACCENT_RED))
-                                .min_size(Vec2::new(90.0, 36.0));
-                            if ui.add(cancel_btn).clicked() {
-                                if let Some(ref cancel) = self.enc_cancel {
-                                    cancel.store(true, Ordering::Relaxed);
-                                }
-                            }
-                        }
-                    });
-
-                    // Live Progress Bar
-                    if let Some(ref status) = self.enc_status {
-                        ui.add_space(8.0);
-                        match status {
-                            WorkerProgress::Started { total } => {
-                                ui.label(format!("Starting transcode: {} frames...", total));
-                            }
-                            WorkerProgress::Progress { current, total, fps, percent } => {
-                                ui.vertical(|ui| {
+                                if let Some(ref path) = self.enc_input_path {
                                     ui.horizontal(|ui| {
-                                        ui.label(format!("Transcoding: {}/{} frames ({:.1}%)", current, total, percent));
-                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                            ui.monospace(format!("{:.1} FPS", fps));
+                                        if let Some(ref thumb) = self.enc_thumbnail_texture {
+                                            let tsz = thumb.size_vec2();
+                                            let t_aspect = if tsz.y > 0.0 { tsz.x / tsz.y } else { 1.0 };
+                                            let (tw, th) = if t_aspect >= 1.0 {
+                                                (72.0, (72.0 / t_aspect).max(18.0))
+                                            } else {
+                                                ((72.0 * t_aspect).max(18.0), 72.0)
+                                            };
+                                            let (rect, _) = ui.allocate_exact_size(Vec2::new(tw, th), egui::Sense::hover());
+                                            paint_transparency_checkerboard(ui.painter(), rect);
+                                            ui.painter().image(thumb.id(), rect, Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                                        }
+                                        ui.vertical(|ui| {
+                                            ui.monospace(format!("Path: {}", path.display()));
+                                            ui.add_space(4.0);
+                                            ui.horizontal(|ui| {
+                                                if let Some(ref codec) = self.enc_detected_codec {
+                                                    render_badge(ui, codec, colors::BG_ELEVATED, colors::ACCENT_CYAN);
+                                                }
+                                                render_badge(ui, &format!("{} frames", self.enc_detected_frames), colors::BG_ELEVATED, colors::TEXT_PRIMARY);
+                                                render_badge(ui, &format!("{}x{}", self.enc_detected_w, self.enc_detected_h), colors::BG_ELEVATED, colors::TEXT_PRIMARY);
+                                            });
                                         });
                                     });
-                                    ui.add(egui::ProgressBar::new(*percent / 100.0).show_percentage());
-                                });
-                            }
-                            WorkerProgress::Finished { message } => {
+                                } else {
+                                    ui.label(RichText::new("No input loaded. Select a file or folder above.").color(colors::TEXT_MUTED));
+                                }
+                            });
+
+                            ui.add_space(10.0);
+
+                            // Presets
+                            ui.strong(RichText::new("Presets").size(14.0));
+                            ui.add_space(6.0);
+                            ui.horizontal_wrapped(|ui| {
+                                let presets = [
+                                    EncoderPreset::HapQRecommended,
+                                    EncoderPreset::HapRUltra,
+                                    EncoderPreset::HapQAlphaTransparent,
+                                    EncoderPreset::Hap1Fast,
+                                    EncoderPreset::HapAlphaLight,
+                                    EncoderPreset::Custom,
+                                ];
+                                for preset in presets {
+                                    let is_sel = self.enc_preset == preset;
+                                    let bg = if is_sel { colors::ACCENT_BLUE } else { colors::BG_ELEVATED };
+                                    let btn = egui::Button::new(RichText::new(preset.name()).size(13.0).color(if is_sel { Color32::WHITE } else { colors::TEXT_MUTED }).strong())
+                                        .min_size(Vec2::new(100.0, 32.0))
+                                        .fill(bg)
+                                        .stroke(Stroke::NONE)
+                                        .corner_radius(CornerRadius::same(5));
+                                    if ui.add(btn).clicked() {
+                                        self.apply_preset(preset);
+                                    }
+                                }
+                            });
+
+                            ui.add_space(4.0);
+                            ui.label(RichText::new(self.enc_preset.description()).color(colors::TEXT_MUTED).size(11.5));
+                            ui.add_space(10.0);
+
+                            // Codec Settings Grid
+                            egui::Grid::new("transcode_params_grid").spacing([24.0, 10.0]).show(ui, |ui| {
+                                ui.label(RichText::new("Format:").color(colors::TEXT_MUTED));
+                                egui::ComboBox::from_id_salt("flavour_combo")
+                                    .selected_text(self.enc_format.name())
+                                    .show_ui(ui, |ui| {
+                                        let old_f = self.enc_format;
+                                        ui.selectable_value(&mut self.enc_format, HapFormat::HapY, "Hap Q (Scaled YCoCg)");
+                                        ui.selectable_value(&mut self.enc_format, HapFormat::Hap7, "Hap R (BC7)");
+                                        ui.selectable_value(&mut self.enc_format, HapFormat::HapM, "Hap Q Alpha (Color + Alpha)");
+                                        ui.selectable_value(&mut self.enc_format, HapFormat::Hap1, "Hap 1 (DXT1)");
+                                        ui.selectable_value(&mut self.enc_format, HapFormat::Hap5, "Hap Alpha (DXT5)");
+                                        ui.selectable_value(&mut self.enc_format, HapFormat::HapA, "Hap Alpha-Only (BC4)");
+                                        if old_f != self.enc_format {
+                                            self.enc_preset = EncoderPreset::Custom;
+                                            self.update_suggested_output_filename();
+                                        }
+                                    });
+                                ui.end_row();
+
+                                ui.label(RichText::new("Frame Rate:").color(colors::TEXT_MUTED));
                                 ui.horizontal(|ui| {
-                                    ui.label(RichText::new(message).color(colors::ACCENT_GREEN).strong());
-                                    if let Some(ref out_mov) = self.enc_last_successful_mov {
-                                        if ui.button("Reveal in File Manager").clicked() {
-                                            reveal_in_file_manager(out_mov);
+                                    ui.add(egui::DragValue::new(&mut self.enc_fps).speed(0.1).range(1.0..=120.0));
+                                    for f in [24.0, 25.0, 30.0, 60.0] {
+                                        if ui.button(format!("{:.0}", f)).clicked() {
+                                            self.enc_fps = f;
                                         }
                                     }
                                 });
-                            }
-                            WorkerProgress::Error(err) => {
-                                ui.label(RichText::new(format!("Error: {}", err)).color(colors::ACCENT_RED).strong());
-                            }
-                        }
-                    }
-                });
+                                ui.end_row();
+
+                                ui.label(RichText::new("Chunks & Compression:").color(colors::TEXT_MUTED));
+                                ui.horizontal(|ui| {
+                                    egui::ComboBox::from_id_salt("chunks_picker_box")
+                                        .selected_text(format!("{} Chunks", self.enc_chunks))
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(&mut self.enc_chunks, 1, "1 Chunk");
+                                            ui.selectable_value(&mut self.enc_chunks, 2, "2 Chunks");
+                                            ui.selectable_value(&mut self.enc_chunks, 4, "4 Chunks");
+                                            ui.selectable_value(&mut self.enc_chunks, 8, "8 Chunks");
+                                            ui.selectable_value(&mut self.enc_chunks, 16, "16 Chunks");
+                                        });
+                                    ui.checkbox(&mut self.enc_snappy, "Snappy Compression");
+                                });
+                                ui.end_row();
+
+                                ui.label(RichText::new("Color Levels:").color(colors::TEXT_MUTED));
+                                egui::ComboBox::from_id_salt("color_range_combo")
+                                    .selected_text(match self.enc_color_range {
+                                        ColorRange::Full => "Full Range (0-255 PC / Graphics)",
+                                        ColorRange::Limited => "Limited Range (16-235 Studio Video -> Expand)",
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut self.enc_color_range, ColorRange::Full, "Full Range (0-255 PC / Graphics / Unreal)");
+                                        ui.selectable_value(&mut self.enc_color_range, ColorRange::Limited, "Limited Range (16-235 Studio Video -> Expand to 0-255)");
+                                    });
+                                ui.end_row();
+
+                                ui.label(RichText::new("Quality Preset:").color(colors::TEXT_MUTED));
+                                egui::ComboBox::from_id_salt("quality_combo")
+                                    .selected_text(match self.enc_quality {
+                                        QualityPreset::Production => "Production Master (ClusterFit, Best Quality)",
+                                        QualityPreset::Draft => "Draft / Rush (RangeFit, ~3x Faster)",
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut self.enc_quality, QualityPreset::Production, "Production Master (ClusterFit, Optimal RMS error)");
+                                        ui.selectable_value(&mut self.enc_quality, QualityPreset::Draft, "Draft / Rush (RangeFit, Real-time fast ingest)");
+                                    });
+                                ui.end_row();
+
+                                ui.label(RichText::new("Output Destination:").color(colors::TEXT_MUTED));
+                                ui.horizontal(|ui| {
+                                    if let Some(ref out) = self.enc_output_path {
+                                        ui.monospace(format!("{}", out.display()));
+                                    } else {
+                                        ui.label(RichText::new("Not set").color(colors::TEXT_FAINT));
+                                    }
+                                    if ui.button("Change...").clicked() {
+                                        if let Some(dest) = rfd::FileDialog::new()
+                                            .add_filter("QuickTime Movie", &["mov"])
+                                            .save_file()
+                                        {
+                                            self.enc_output_path = Some(dest);
+                                        }
+                                    }
+                                });
+                                ui.end_row();
+                            });
+                        });
+                    });
             });
         self.show_transcode_window = open;
     }
@@ -3037,8 +3059,8 @@ impl HapLabApp {
                     ui.add_space(6.0);
 
                     let log_frame = egui::Frame::new()
-                        .fill(Color32::from_rgb(10, 12, 16))
-                        .stroke(Stroke::NONE)
+                        .fill(colors::BG_CARD)
+                        .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
                         .corner_radius(CornerRadius::same(6))
                         .inner_margin(egui::Margin::same(10));
 
