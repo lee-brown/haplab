@@ -169,6 +169,9 @@ pub fn parse_probe_output(out_str: &str) -> Result<(String, usize, usize, f32, u
     let mut avg_fps_str = String::new();
     let mut durations: Vec<f32> = Vec::new();
     let mut nb_frames = 0usize;
+    let mut sar_str = String::new();
+    let mut dar_str = String::new();
+    let mut rotation: i32 = 0;
 
     for line in out_str.lines() {
         let line = line.trim();
@@ -181,6 +184,13 @@ pub fn parse_probe_output(out_str: &str) -> Result<(String, usize, usize, f32, u
                 "height" => height = v.parse().unwrap_or(0),
                 "r_frame_rate" => r_fps_str = v.to_string(),
                 "avg_frame_rate" => avg_fps_str = v.to_string(),
+                "sample_aspect_ratio" => sar_str = v.to_string(),
+                "display_aspect_ratio" => dar_str = v.to_string(),
+                "rotation" | "TAG:rotate" | "tag:rotate" | "TAG:ROTATE" | "tag:ROTATE" => {
+                    if let Ok(r) = v.parse::<f32>() {
+                        rotation = r.round() as i32;
+                    }
+                }
                 "duration" | "TAG:DURATION" | "tag:duration" | "TAG:duration" => {
                     if let Some(d) = parse_time_val(v) {
                         if d > 0.0 {
@@ -200,6 +210,45 @@ pub fn parse_probe_output(out_str: &str) -> Result<(String, usize, usize, f32, u
 
     if width == 0 || height == 0 {
         return Err("Could not parse valid video dimensions from ffprobe output.".into());
+    }
+
+    // Handle non-square pixel aspect ratio (SAR / DAR) before rotation
+    let parse_ratio = |s: &str| -> Option<(f32, f32)> {
+        if s.is_empty() || s == "N/A" {
+            return None;
+        }
+        if let Some((num, den)) = s.split_once(':') {
+            let n: f32 = num.trim().parse().ok()?;
+            let d: f32 = den.trim().parse().ok()?;
+            if n > 0.0 && d > 0.0 {
+                return Some((n, d));
+            }
+        } else if let Some((num, den)) = s.split_once('/') {
+            let n: f32 = num.trim().parse().ok()?;
+            let d: f32 = den.trim().parse().ok()?;
+            if n > 0.0 && d > 0.0 {
+                return Some((n, d));
+            }
+        }
+        None
+    };
+
+    if let Some((dar_w, dar_h)) = parse_ratio(&dar_str) {
+        let dar = dar_w / dar_h;
+        if dar > 0.1 && dar < 10.0 {
+            width = ((height as f32 * dar).round() as usize).max(2);
+        }
+    } else if let Some((sar_w, sar_h)) = parse_ratio(&sar_str) {
+        let sar = sar_w / sar_h;
+        if (sar - 1.0).abs() > 0.01 && sar > 0.1 && sar < 10.0 {
+            width = ((width as f32 * sar).round() as usize).max(2);
+        }
+    }
+
+    // Handle rotation metadata (e.g. 90 or 270 degree portrait mobile phone recordings)
+    let rot_abs = rotation.abs() % 360;
+    if rot_abs == 90 || rot_abs == 270 {
+        std::mem::swap(&mut width, &mut height);
     }
 
     let codec = match codec_raw.to_lowercase().as_str() {
@@ -296,7 +345,7 @@ pub fn probe_video_metadata(path: &std::path::Path) -> Result<(String, usize, us
         .args(&[
             "-v", "error",
             "-select_streams", "v:0",
-            "-show_entries", "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,duration,nb_frames:format=duration:stream_tags=DURATION,duration:format_tags=DURATION,duration",
+            "-show_entries", "stream=codec_name,width,height,sample_aspect_ratio,display_aspect_ratio,r_frame_rate,avg_frame_rate,duration,nb_frames:stream_side_data=rotation,side_data_type:stream_tags=rotate,duration,DURATION:format=duration:format_tags=duration,DURATION",
             "-of", "default=noprint_wrappers=1",
         ])
         .arg(path);
@@ -352,7 +401,7 @@ pub fn probe_video_input(path: &std::path::Path) -> Result<VideoProbeInfo, Strin
         .stderr(std::process::Stdio::piped())
         .args(&["-nostdin", "-an", "-sn", "-v", "error", "-ss", "00:00:00", "-i"])
         .arg(path)
-        .args(&["-vframes", "1", "-vf", "scale=min(640\\,iw):-2", "-f", "image2pipe", "-vcodec", "png", "-"]);
+        .args(&["-vframes", "1", "-vf", "scale=min(640\\,iw):-2,setsar=1", "-f", "image2pipe", "-vcodec", "png", "-"]);
     #[cfg(windows)]
     thumb_cmd.creation_flags(CREATE_NO_WINDOW);
 
@@ -411,16 +460,14 @@ impl GenericVideoPlayer {
         let original_width = probe.width;
         let original_height = probe.height;
 
-        // For display preview texture of generic non-HAP files, scale down to 720p max
-        // to maintain 30-60 FPS pipe throughput with low GPU memory upload overhead.
-        let (play_width, play_height) = if original_width > 1280 || original_height > 720 {
-            let aspect = original_width as f32 / original_height.max(1) as f32;
-            let w = 1280.min(original_width);
-            let h = ((w as f32 / aspect).round() as usize) & !1;
-            (w, h.max(2))
-        } else {
-            (original_width, original_height)
-        };
+        // Scale down preview texture to maintain high FPS throughput while
+        // strictly preserving the true display aspect ratio inside a max 1280x720 box.
+        let scale_x = 1280.0 / original_width.max(1) as f32;
+        let scale_y = 720.0 / original_height.max(1) as f32;
+        let scale = scale_x.min(scale_y).min(1.0);
+
+        let play_width = ((original_width as f32 * scale).round() as usize).max(2) & !1;
+        let play_height = ((original_height as f32 * scale).round() as usize).max(2) & !1;
 
         Self {
             path,
@@ -487,7 +534,9 @@ impl GenericVideoPlayer {
                 cmd.arg("-i").arg(&path);
 
                 if pw != orig_w || ph != orig_h {
-                    cmd.args(&["-vf", &format!("scale={}:{}:flags=fast_bilinear", pw, ph)]);
+                    cmd.args(&["-vf", &format!("scale={}:{}:flags=fast_bilinear,setsar=1", pw, ph)]);
+                } else {
+                    cmd.args(&["-vf", "setsar=1"]);
                 }
 
                 cmd.args(&["-f", "rawvideo", "-pix_fmt", "rgba", "-"]);
@@ -605,7 +654,9 @@ impl GenericVideoPlayer {
         .arg(&self.path);
 
         if self.play_width != self.original_width || self.play_height != self.original_height {
-            cmd.args(&["-vf", &format!("scale={}:{}:flags=fast_bilinear", self.play_width, self.play_height)]);
+            cmd.args(&["-vf", &format!("scale={}:{}:flags=fast_bilinear,setsar=1", self.play_width, self.play_height)]);
+        } else {
+            cmd.args(&["-vf", "setsar=1"]);
         }
 
         cmd.args(&[
@@ -908,7 +959,7 @@ fn spawn_encode_from_video(
         "-i",
     ])
         .arg(&config.input_dir)
-        .args(&["-f", "rawvideo", "-pix_fmt", "rgba", "-"]);
+        .args(&["-vf", "setsar=1", "-f", "rawvideo", "-pix_fmt", "rgba", "-"]);
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
@@ -1561,6 +1612,32 @@ mod tests {
         assert!((fps - 30.0).abs() < 0.001);
         assert_eq!(frames, 120);
         assert!((dur - 4.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_parse_probe_output_rotation() {
+        // Simulates a smartphone video recorded in portrait mode (1920x1080 sensor with -90 degree rotation)
+        let sample = "codec_name=hevc\nwidth=1920\nheight=1080\nsample_aspect_ratio=1:1\ndisplay_aspect_ratio=16:9\nr_frame_rate=30/1\navg_frame_rate=30/1\nduration=5.000000\nnb_frames=150\nrotation=-90\n";
+        let (codec, w, h, fps, frames, dur) = parse_probe_output(sample).unwrap();
+        assert_eq!(codec, "H.265 / HEVC");
+        assert_eq!(w, 1080); // Width and height should be swapped to 1080x1920 portrait
+        assert_eq!(h, 1920);
+        assert!((fps - 30.0).abs() < 0.001);
+        assert_eq!(frames, 150);
+        assert!((dur - 5.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_parse_probe_output_dar() {
+        // Simulates an anamorphic video (1440x1080 with 16:9 DAR)
+        let sample = "codec_name=h264\nwidth=1440\nheight=1080\ndisplay_aspect_ratio=16:9\nr_frame_rate=25/1\navg_frame_rate=25/1\nduration=2.000000\nnb_frames=50\n";
+        let (codec, w, h, fps, frames, dur) = parse_probe_output(sample).unwrap();
+        assert_eq!(codec, "H.264 / AVC");
+        assert_eq!(w, 1920); // Display width corrected to 1920
+        assert_eq!(h, 1080);
+        assert!((fps - 25.0).abs() < 0.001);
+        assert_eq!(frames, 50);
+        assert!((dur - 2.0).abs() < 0.001);
     }
 }
 

@@ -635,7 +635,9 @@ impl HapLabApp {
                         .arg(&path);
 
                         if pw != orig_w || ph != orig_h {
-                            cmd.args(&["-vf", &format!("scale={}:{}:flags=fast_bilinear", pw, ph)]);
+                            cmd.args(&["-vf", &format!("scale={}:{}:flags=fast_bilinear,setsar=1", pw, ph)]);
+                        } else {
+                            cmd.args(&["-vf", "setsar=1"]);
                         }
 
                         cmd.args(&[
@@ -2331,11 +2333,25 @@ impl eframe::App for HapLabApp {
                         (16.0, 9.0)
                     };
 
-                    let aspect = content_w / content_h.max(1.0);
-                    let target_w = available_size.x;
-                    let target_h = (target_w / aspect).min(available_size.y);
-                    let final_w = (target_h * aspect).min(available_size.x);
-                    let final_h = target_h;
+                    // Derive aspect ratio strictly from active texture if loaded,
+                    // guaranteeing 100% distortion-free fit without any stretching.
+                    let aspect = if let Some(ref tex) = self.preview_texture {
+                        let sz = tex.size_vec2();
+                        if sz.y > 0.0 {
+                            sz.x / sz.y
+                        } else {
+                            content_w / content_h.max(1.0)
+                        }
+                    } else {
+                        content_w / content_h.max(1.0)
+                    };
+
+                    let aspect = aspect.max(0.01);
+                    let (final_w, final_h) = if available_size.x / aspect <= available_size.y {
+                        (available_size.x, available_size.x / aspect)
+                    } else {
+                        (available_size.y * aspect, available_size.y)
+                    };
 
                     let y_padding = ((available_size.y - final_h) * 0.5).max(0.0);
                     if y_padding > 0.0 {
@@ -2519,7 +2535,14 @@ impl HapLabApp {
                         if let Some(ref path) = self.enc_input_path {
                             ui.horizontal(|ui| {
                                 if let Some(ref thumb) = self.enc_thumbnail_texture {
-                                    let (rect, _) = ui.allocate_exact_size(Vec2::new(72.0, 72.0), egui::Sense::hover());
+                                    let tsz = thumb.size_vec2();
+                                    let t_aspect = if tsz.y > 0.0 { tsz.x / tsz.y } else { 1.0 };
+                                    let (tw, th) = if t_aspect >= 1.0 {
+                                        (72.0, (72.0 / t_aspect).max(18.0))
+                                    } else {
+                                        ((72.0 * t_aspect).max(18.0), 72.0)
+                                    };
+                                    let (rect, _) = ui.allocate_exact_size(Vec2::new(tw, th), egui::Sense::hover());
                                     paint_transparency_checkerboard(ui.painter(), rect);
                                     ui.painter().image(thumb.id(), rect, Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                                 }
