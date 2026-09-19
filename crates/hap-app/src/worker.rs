@@ -2,9 +2,9 @@
 
 use crossbeam_channel::{Receiver, Sender};
 use hap_core::{
-    decode_frame_to_rgba, encode_frame_with_options, extract_stream_summary, AlphaMode, ColorRange,
-    DitherMode, EncodeOptions, HapFormat, QualityPreset, QtHapReader, QtHapWriter, StreamSummary,
-    VideoConfig,
+    audit_hap_stream, decode_frame_to_rgba, encode_frame_with_options, extract_stream_summary,
+    AlphaMode, ColorRange, DitherMode, EncodeOptions, HapFormat, QualityPreset, QtHapReader,
+    QtHapWriter, StreamAudit, StreamSummary, VideoConfig,
 };
 use image::GenericImageView;
 use std::fs;
@@ -27,6 +27,7 @@ pub enum MediaLoadResult {
         path: PathBuf,
         reader: QtHapReader,
         summary: Option<StreamSummary>,
+        audit: Option<StreamAudit>,
         first_frame_rgba: Option<Vec<u8>>,
         first_frame_decode_ms: f32,
         first_packet_bytes: usize,
@@ -1253,6 +1254,7 @@ pub fn spawn_media_loader(path: PathBuf, tx: Sender<MediaLoadResult>) {
                 if let Ok(mut reader) = QtHapReader::open(&path) {
                     let file_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                     let summary = extract_stream_summary(&mut reader, file_size).ok();
+                    let audit = Some(audit_hap_stream(&mut reader, 120));
                     let (first_rgba, decode_ms, pkt_bytes) = if let Ok(pkt) = reader.read_frame_packet(0) {
                         let p_len = pkt.len();
                         let t0 = Instant::now();
@@ -1267,6 +1269,7 @@ pub fn spawn_media_loader(path: PathBuf, tx: Sender<MediaLoadResult>) {
                         path,
                         reader,
                         summary,
+                        audit,
                         first_frame_rgba: first_rgba,
                         first_frame_decode_ms: decode_ms,
                         first_packet_bytes: pkt_bytes,
