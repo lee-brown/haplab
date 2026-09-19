@@ -104,6 +104,7 @@ pub struct HapLabApp {
     pending_seek_frame: Option<usize>,
     was_playing_before_scrub: bool,
     is_fullscreen: bool,
+    fullscreen_suppress_until: Instant,
     last_cursor_pos: Option<egui::Pos2>,
     last_cursor_activity: Instant,
     cursor_hidden: bool,
@@ -212,10 +213,13 @@ impl Default for HapLabApp {
             pending_seek_frame: None,
             was_playing_before_scrub: false,
             is_fullscreen: false,
+            fullscreen_suppress_until: Instant::now(),
             last_cursor_pos: None,
             last_cursor_activity: Instant::now(),
             cursor_hidden: false,
-            last_fullscreen_toggle: Instant::now(),
+            last_fullscreen_toggle: Instant::now()
+                .checked_sub(std::time::Duration::from_secs(10))
+                .unwrap_or_else(Instant::now),
             playback_start_instant: Instant::now(),
             playback_start_frame: 0,
             current_frame: 0,
@@ -460,10 +464,19 @@ impl HapLabApp {
         self.last_fullscreen_toggle = Instant::now();
         self.is_fullscreen = !self.is_fullscreen;
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
-        self.last_cursor_activity = Instant::now();
-        if !self.is_fullscreen && self.cursor_hidden {
+
+        if self.is_fullscreen {
+            self.cursor_hidden = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(false));
+            self.last_cursor_pos = ctx.input(|i| i.pointer.latest_pos());
+            self.last_cursor_activity = Instant::now()
+                .checked_sub(std::time::Duration::from_secs(10))
+                .unwrap_or_else(Instant::now);
+            self.fullscreen_suppress_until = Instant::now() + std::time::Duration::from_millis(350);
+        } else {
             self.cursor_hidden = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(true));
+            self.last_cursor_activity = Instant::now();
         }
     }
 
@@ -927,20 +940,55 @@ impl eframe::App for HapLabApp {
 
         // Track cursor activity and movement for true fullscreen auto-hide
         let current_cursor = ctx.input(|i| i.pointer.latest_pos());
-        let cursor_moved = match (current_cursor, self.last_cursor_pos) {
-            (Some(p1), Some(p2)) => p1.distance(p2) > 2.0,
-            (Some(_), None) => true,
-            _ => false,
-        };
-        let user_input_active = cursor_moved
-            || ctx.input(|i| {
-                i.pointer.any_down()
-                    || i.pointer.any_pressed()
-                    || i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. }))
-            });
+        let in_suppress_window = self.is_fullscreen && Instant::now() < self.fullscreen_suppress_until;
 
-        if user_input_active {
-            if cursor_moved || ctx.input(|i| i.pointer.any_down() || i.pointer.any_pressed()) {
+        if in_suppress_window {
+            self.last_cursor_pos = current_cursor;
+        }
+
+        let cursor_moved = if in_suppress_window {
+            false
+        } else {
+            match (current_cursor, self.last_cursor_pos) {
+                (Some(p1), Some(p2)) => p1.distance(p2) > 3.0,
+                (Some(_), None) => false,
+                _ => false,
+            }
+        };
+
+        let pointer_clicked = !in_suppress_window
+            && ctx.input(|i| i.pointer.any_down() || i.pointer.any_pressed());
+
+        let viewport_rect = ctx.viewport_rect();
+        let cursor_in_controls = if !in_suppress_window && !self.cursor_hidden {
+            if let Some(pos) = current_cursor {
+                pos.y < 42.0 || pos.y > (viewport_rect.height() - 76.0).max(0.0)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        let dialog_open = self.show_transcode_window
+            || self.show_benchmark_window
+            || self.show_audit_window
+            || self.show_diagnostics_window
+            || self.show_shortcuts_window
+            || self.show_about_window;
+
+        // In fullscreen mode, UI is revealed only when mouse moves, clicks, hovers controls, or a dialog is active
+        // In windowed mode, user interaction keeps UI active
+        let user_activity = if self.is_fullscreen {
+            cursor_moved || pointer_clicked || cursor_in_controls || dialog_open
+        } else {
+            cursor_moved
+                || pointer_clicked
+                || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })))
+        };
+
+        if user_activity {
+            if cursor_moved || pointer_clicked {
                 self.last_cursor_pos = current_cursor;
             }
             self.last_cursor_activity = Instant::now();
@@ -950,7 +998,8 @@ impl eframe::App for HapLabApp {
             }
         }
 
-        let fullscreen_ui_visible = !self.is_fullscreen || self.last_cursor_activity.elapsed().as_secs_f32() < 2.5;
+        let fullscreen_ui_visible = !self.is_fullscreen
+            || (!in_suppress_window && (dialog_open || self.last_cursor_activity.elapsed().as_secs_f32() < 2.5));
 
         if self.is_fullscreen {
             if !fullscreen_ui_visible {
@@ -1637,10 +1686,10 @@ impl eframe::App for HapLabApp {
         }
 
         // ===================================================================
-        // 1. TOP STUDIO HEADER & BOTTOM TRANSPORT/METADATA BARS
-        // REVEALED IN WINDOWED MODE OR WHEN CURSOR MOVES IN FULLSCREEN
+        // 1. TOP STUDIO HEADER & BOTTOM TRANSPORT/METADATA BARS (WINDOWED MODE)
+        // IN FULLSCREEN MODE, THESE ARE RENDERED AS FLOATING OVERLAYS INSTEAD
         // ===================================================================
-        if !is_fullscreen || fullscreen_ui_visible {
+        if !is_fullscreen {
             let menu_frame = if has_media {
                 egui::Frame::new()
                     .fill(Color32::from_rgba_premultiplied(12, 12, 12, 235))
@@ -1866,7 +1915,71 @@ impl eframe::App for HapLabApp {
             });
 
         // ===================================================================
-        // 4. FLOATING STUDIO WINDOWS / DIALOGS
+        // 4. FLOATING OVERLAY UI (FULLSCREEN MODE)
+        // FLOATS OVER THE VIDEO WITHOUT CAUSING THE VIDEO CANVAS TO RESIZE
+        // ===================================================================
+        if is_fullscreen && fullscreen_ui_visible {
+            let screen_rect = ctx.viewport_rect();
+            let screen_w = screen_rect.width();
+
+            // Floating top bar (branding, menu, window controls)
+            egui::Area::new(egui::Id::new("fullscreen_overlay_top_bar"))
+                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::LEFT_TOP, egui::Vec2::ZERO)
+                .movable(false)
+                .show(&ctx, |ui| {
+                    ui.set_min_width(screen_w);
+                    ui.set_max_width(screen_w);
+                    ui.spacing_mut().item_spacing = Vec2::ZERO;
+
+                    let menu_frame = egui::Frame::new()
+                        .fill(Color32::from_rgba_premultiplied(12, 12, 12, 235))
+                        .stroke(Stroke::NONE)
+                        .inner_margin(egui::Margin::symmetric(14, 6));
+
+                    menu_frame.show(ui, |ui| {
+                        ui.set_min_width(screen_w - 28.0);
+                        ui.set_max_width(screen_w - 28.0);
+                        self.render_top_bar(ui, true, is_maximized);
+                    });
+                });
+
+            // Floating bottom controls (transport scrubber + metadata strip)
+            egui::Area::new(egui::Id::new("fullscreen_overlay_bottom_bar"))
+                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::LEFT_BOTTOM, egui::Vec2::ZERO)
+                .movable(false)
+                .show(&ctx, |ui| {
+                    ui.set_min_width(screen_w);
+                    ui.set_max_width(screen_w);
+                    ui.spacing_mut().item_spacing = Vec2::ZERO;
+
+                    let transport_frame = egui::Frame::new()
+                        .fill(Color32::from_rgba_premultiplied(12, 12, 12, 235))
+                        .stroke(Stroke::NONE)
+                        .inner_margin(egui::Margin::symmetric(18, 8));
+
+                    transport_frame.show(ui, |ui| {
+                        ui.set_min_width(screen_w - 36.0);
+                        ui.set_max_width(screen_w - 36.0);
+                        self.render_bottom_transport(ui, &ctx);
+                    });
+
+                    let metadata_frame = egui::Frame::new()
+                        .fill(Color32::from_rgba_premultiplied(12, 12, 12, 245))
+                        .stroke(Stroke::new(1.0, Color32::from_rgb(26, 26, 26)))
+                        .inner_margin(egui::Margin::symmetric(14, 4));
+
+                    metadata_frame.show(ui, |ui| {
+                        ui.set_min_width(screen_w - 28.0);
+                        ui.set_max_width(screen_w - 28.0);
+                        self.render_bottom_metadata(ui);
+                    });
+                });
+        }
+
+        // ===================================================================
+        // 5. FLOATING STUDIO WINDOWS / DIALOGS
         // ===================================================================
         self.show_transcode_dialog(&ctx);
         self.show_benchmark_dialog(&ctx);
@@ -3984,5 +4097,35 @@ mod tests {
         });
         let primitives = ctx.tessellate(output.shapes, 1.0);
         assert!(!primitives.is_empty());
+    }
+
+    #[test]
+    fn test_fullscreen_mode_overlay_and_autohide() {
+        let mut app = HapLabApp::default();
+        let ctx = egui::Context::default();
+
+        assert!(!app.is_fullscreen);
+        assert!(!app.cursor_hidden);
+
+        // Entering fullscreen hides cursor and suppresses UI initially
+        app.toggle_fullscreen(&ctx);
+        assert!(app.is_fullscreen);
+        assert!(app.cursor_hidden);
+
+        // Frame execution right after entering fullscreen with no mouse movement
+        let _ = ctx.run_ui(Default::default(), |_ctx| {
+            let in_suppress = app.is_fullscreen && Instant::now() < app.fullscreen_suppress_until;
+            assert!(in_suppress);
+            let ui_visible = !app.is_fullscreen || (!in_suppress && app.last_cursor_activity.elapsed().as_secs_f32() < 2.5);
+            assert!(!ui_visible);
+        });
+
+        // Exiting fullscreen restores windowed mode and cursor visibility
+        app.last_fullscreen_toggle = Instant::now()
+            .checked_sub(std::time::Duration::from_millis(500))
+            .unwrap_or_else(Instant::now);
+        app.toggle_fullscreen(&ctx);
+        assert!(!app.is_fullscreen);
+        assert!(!app.cursor_hidden);
     }
 }
