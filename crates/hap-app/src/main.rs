@@ -17,7 +17,6 @@ use std::env;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
-    // Install a panic hook that logs crash details to a file for diagnostics
     std::panic::set_hook(Box::new(|panic_info| {
         let location = panic_info
             .location()
@@ -30,7 +29,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             "Box<dyn Any>".to_string()
         };
-        let msg = format!("HapLab Panic at [{}]: {}\n", location, payload);
+        let bt = std::backtrace::Backtrace::force_capture();
+        let msg = format!("HapLab Panic at [{}]: {}\nBacktrace:\n{}\n", location, payload, bt);
         eprintln!("{}", msg);
         if let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)
@@ -96,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eframe::run_native(
         "HapLab",
         native_options,
-        Box::new(|_cc| Ok(Box::new(HapLabApp::default()))),
+        Box::new(|cc| Ok(Box::new(HapLabApp::new(cc)))),
     )
     .map_err(|e| format!("GUI launch failed: {}", e))?;
 

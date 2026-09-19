@@ -194,25 +194,6 @@ pub struct HapLabApp {
 
 impl Default for HapLabApp {
     fn default() -> Self {
-        let instance = wgpu::Instance::default();
-        let adapter_res: Result<wgpu::Adapter, _> = pollster::block_on(instance.request_adapter(
-            &wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            },
-        ));
-        let (adapter_name, backend_name, supports_bc) = match adapter_res {
-            Ok(adapter) => {
-                let info = adapter.get_info();
-                let has_bc = adapter
-                    .features()
-                    .contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
-                (info.name, format!("{:?}", info.backend), has_bc)
-            }
-            Err(_) => ("Software / Fallback".to_string(), "None".to_string(), false),
-        };
-
         let mut app = Self {
             toast: None,
 
@@ -301,9 +282,9 @@ impl Default for HapLabApp {
             bench_current_fps: 0.0,
             bench_is_running: false,
 
-            gpu_adapter_name: adapter_name,
-            gpu_backend_name: backend_name,
-            gpu_supports_bc: supports_bc,
+            gpu_adapter_name: "Hardware Adapter".to_string(),
+            gpu_backend_name: "GPU".to_string(),
+            gpu_supports_bc: false,
             system_logs: Vec::new(),
             log_search: String::new(),
             app_icon_texture: None,
@@ -314,24 +295,36 @@ impl Default for HapLabApp {
         };
 
         app.log("HapLab initialized in player-first studio layout.");
-        app.log(&format!(
-            "Graphics Device: {} [{}]",
-            app.gpu_adapter_name, app.gpu_backend_name
-        ));
-        app.log(&format!(
-            "Hardware BC Texture Uploads: {}",
-            if app.gpu_supports_bc {
-                "Supported"
-            } else {
-                "Software Fallback"
-            }
-        ));
-
         app
     }
 }
 
 impl HapLabApp {
+    pub fn new(cc: &eframe::CreationContext) -> Self {
+        let mut app = Self::default();
+        if let Some(ref rs) = cc.wgpu_render_state {
+            let info = rs.adapter.get_info();
+            app.gpu_adapter_name = info.name;
+            app.gpu_backend_name = format!("{:?}", info.backend);
+            app.gpu_supports_bc = rs
+                .adapter
+                .features()
+                .contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+            app.log(&format!(
+                "Graphics Device: {} [{}]",
+                app.gpu_adapter_name, app.gpu_backend_name
+            ));
+            app.log(&format!(
+                "Hardware BC Texture Uploads: {}",
+                if app.gpu_supports_bc {
+                    "Supported"
+                } else {
+                    "Software Fallback"
+                }
+            ));
+        }
+        app
+    }
     fn log(&mut self, msg: &str) {
         let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();
         self.system_logs.push(format!("[{}] {}", timestamp, msg));
@@ -978,16 +971,6 @@ impl eframe::App for HapLabApp {
         let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         handle_window_edge_resize(ctx, is_maximized, self.is_fullscreen);
 
-        if !self.is_fullscreen && !is_maximized {
-            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("window_border")));
-            painter.rect_stroke(
-                ctx.viewport_rect(),
-                0.0,
-                Stroke::new(1.0, Color32::from_rgb(38, 38, 38)),
-                egui::StrokeKind::Inside,
-            );
-        }
-
         // 1. Drag & Drop File Handling
         let dropped_file_path = ctx.input_mut(|i| {
             self.is_drag_hovered = !i.raw.hovered_files.is_empty();
@@ -1006,109 +989,136 @@ impl eframe::App for HapLabApp {
         }
 
         // 2. Global & Player Keyboard Shortcuts
+        // Note: Query egui_wants_keyboard_input outside ctx.input to avoid self-deadlock on Context RwLock
+        let egui_wants_keyboard = ctx.egui_wants_keyboard_input();
+        let mut open_file = false;
+        let mut open_folder = false;
+        let mut toggle_transcode = false;
+        let mut toggle_bench = false;
+        let mut toggle_audit = false;
+        let mut toggle_diag = false;
+        let mut close_media = false;
+        let mut toggle_shortcuts = false;
+        let mut toggle_hud = false;
+        let mut toggle_fs = false;
+        let mut toggle_play = false;
+        let mut seek_delta: Option<isize> = None;
+        let mut seek_abs: Option<usize> = None;
+        let mut toggle_loop = false;
+        let mut set_channel: Option<ChannelViewMode> = None;
+
         ctx.input(|i| {
             // Hotkeys with Ctrl / Command
             if i.modifiers.command {
                 if i.key_pressed(egui::Key::O) {
                     if i.modifiers.shift {
-                        // Ctrl+Shift+O: Open Folder
-                        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                            self.open_media_file(folder, ctx);
-                        }
+                        open_folder = true;
                     } else {
-                        // Ctrl+O: Open Media File
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("All Media", &["mov", "mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts", "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
-                            .add_filter("QuickTime HAP Videos (*.mov)", &["mov"])
-                            .add_filter("Video Files (*.mp4, *.mkv, *.webm, *.mxf, *.avi)", &["mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts"])
-                            .add_filter("Image Sequences (*.png, *.tiff, *.jpg)", &["png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
-                            .pick_file()
-                        {
-                            self.open_media_file(path, ctx);
-                        }
+                        open_file = true;
                     }
                 }
-                if i.key_pressed(egui::Key::E) {
-                    self.show_transcode_window = !self.show_transcode_window;
-                }
-                if i.key_pressed(egui::Key::B) {
-                    self.show_benchmark_window = !self.show_benchmark_window;
-                }
-                if i.key_pressed(egui::Key::T) {
-                    self.show_audit_window = !self.show_audit_window;
-                }
-                if i.key_pressed(egui::Key::D) {
-                    self.show_diagnostics_window = !self.show_diagnostics_window;
-                }
-                if i.key_pressed(egui::Key::W) {
-                    self.close_media();
-                }
+                if i.key_pressed(egui::Key::E) { toggle_transcode = true; }
+                if i.key_pressed(egui::Key::B) { toggle_bench = true; }
+                if i.key_pressed(egui::Key::T) { toggle_audit = true; }
+                if i.key_pressed(egui::Key::D) { toggle_diag = true; }
+                if i.key_pressed(egui::Key::W) { close_media = true; }
             }
 
             // Function keys
-            if i.key_pressed(egui::Key::F1) {
-                self.show_shortcuts_window = !self.show_shortcuts_window;
-            }
-            if i.key_pressed(egui::Key::I) {
-                self.show_hud_overlay = !self.show_hud_overlay;
-            }
-            if i.key_pressed(egui::Key::F11) {
-                self.toggle_fullscreen(ctx);
-            }
-            if i.key_pressed(egui::Key::Escape) && self.is_fullscreen {
-                self.toggle_fullscreen(ctx);
-            }
+            if i.key_pressed(egui::Key::F1) { toggle_shortcuts = true; }
+            if i.key_pressed(egui::Key::I) { toggle_hud = true; }
+            if i.key_pressed(egui::Key::F11) { toggle_fs = true; }
+            if i.key_pressed(egui::Key::Escape) && self.is_fullscreen { toggle_fs = true; }
 
-            if !ctx.egui_wants_keyboard_input() {
+            if !egui_wants_keyboard {
                 if i.key_pressed(egui::Key::Space) {
-                    if self.has_video_loaded() {
-                        self.toggle_playback(ctx);
-                    }
+                    toggle_play = true;
                 }
-
-                // Playback controls (when any video is loaded)
-                if self.has_video_loaded() {
-                    let frame_count = self.video_total_frames();
-                    if frame_count > 0 {
-                        if i.key_pressed(egui::Key::ArrowLeft) {
-                            let step = if i.modifiers.shift { 10 } else { 1 };
-                            let target = self.current_frame.saturating_sub(step);
-                            self.seek_to_frame(target, ctx);
-                        }
-                        if i.key_pressed(egui::Key::ArrowRight) {
-                            let step = if i.modifiers.shift { 10 } else { 1 };
-                            let target = (self.current_frame + step).min(frame_count.saturating_sub(1));
-                            self.seek_to_frame(target, ctx);
-                        }
-                        if i.key_pressed(egui::Key::Home) {
-                            self.seek_to_frame(0, ctx);
-                        }
-                        if i.key_pressed(egui::Key::End) {
-                            self.seek_to_frame(frame_count.saturating_sub(1), ctx);
-                        }
-                        if i.key_pressed(egui::Key::L) {
-                            self.loop_playback = !self.loop_playback;
-                            self.notify(
-                                format!("Loop: {}", if self.loop_playback { "On" } else { "Off" }),
-                                colors::ACCENT_CYAN,
-                            );
-                        }
-                        if i.key_pressed(egui::Key::Num1) {
-                            self.channel_mode = ChannelViewMode::Rgba;
-                            self.refresh_channel_view(ctx);
-                        }
-                        if i.key_pressed(egui::Key::Num2) {
-                            self.channel_mode = ChannelViewMode::RgbOpaque;
-                            self.refresh_channel_view(ctx);
-                        }
-                        if i.key_pressed(egui::Key::Num3) {
-                            self.channel_mode = ChannelViewMode::AlphaMatte;
-                            self.refresh_channel_view(ctx);
-                        }
-                    }
+                if i.key_pressed(egui::Key::ArrowLeft) {
+                    seek_delta = Some(if i.modifiers.shift { -10 } else { -1 });
+                }
+                if i.key_pressed(egui::Key::ArrowRight) {
+                    seek_delta = Some(if i.modifiers.shift { 10 } else { 1 });
+                }
+                if i.key_pressed(egui::Key::Home) {
+                    seek_abs = Some(0);
+                }
+                if i.key_pressed(egui::Key::End) {
+                    seek_abs = Some(usize::MAX);
+                }
+                if i.key_pressed(egui::Key::L) {
+                    toggle_loop = true;
+                }
+                if i.key_pressed(egui::Key::Num1) {
+                    set_channel = Some(ChannelViewMode::Rgba);
+                }
+                if i.key_pressed(egui::Key::Num2) {
+                    set_channel = Some(ChannelViewMode::RgbOpaque);
+                }
+                if i.key_pressed(egui::Key::Num3) {
+                    set_channel = Some(ChannelViewMode::AlphaMatte);
                 }
             }
         });
+
+        if open_folder {
+            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                self.open_media_file(folder, ctx);
+            }
+        }
+        if open_file {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("All Media", &["mov", "mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts", "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
+                .add_filter("QuickTime HAP Videos (*.mov)", &["mov"])
+                .add_filter("Video Files (*.mp4, *.mkv, *.webm, *.mxf, *.avi)", &["mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts"])
+                .add_filter("Image Sequences (*.png, *.tiff, *.jpg)", &["png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
+                .pick_file()
+            {
+                self.open_media_file(path, ctx);
+            }
+        }
+        if toggle_transcode { self.show_transcode_window = !self.show_transcode_window; }
+        if toggle_bench { self.show_benchmark_window = !self.show_benchmark_window; }
+        if toggle_audit { self.show_audit_window = !self.show_audit_window; }
+        if toggle_diag { self.show_diagnostics_window = !self.show_diagnostics_window; }
+        if close_media { self.close_media(); }
+        if toggle_shortcuts { self.show_shortcuts_window = !self.show_shortcuts_window; }
+        if toggle_hud { self.show_hud_overlay = !self.show_hud_overlay; }
+        if toggle_fs { self.toggle_fullscreen(ctx); }
+        if toggle_play && self.has_video_loaded() { self.toggle_playback(ctx); }
+        if let Some(delta) = seek_delta {
+            if self.has_video_loaded() {
+                let frame_count = self.video_total_frames();
+                if frame_count > 0 {
+                    let target = if delta < 0 {
+                        self.current_frame.saturating_sub((-delta) as usize)
+                    } else {
+                        (self.current_frame + delta as usize).min(frame_count.saturating_sub(1))
+                    };
+                    self.seek_to_frame(target, ctx);
+                }
+            }
+        }
+        if let Some(abs) = seek_abs {
+            if self.has_video_loaded() {
+                let frame_count = self.video_total_frames();
+                if frame_count > 0 {
+                    let target = abs.min(frame_count.saturating_sub(1));
+                    self.seek_to_frame(target, ctx);
+                }
+            }
+        }
+        if toggle_loop {
+            self.loop_playback = !self.loop_playback;
+            self.notify(
+                format!("Loop: {}", if self.loop_playback { "On" } else { "Off" }),
+                colors::ACCENT_CYAN,
+            );
+        }
+        if let Some(mode) = set_channel {
+            self.channel_mode = mode;
+            self.refresh_channel_view(ctx);
+        }
 
         // 3. Playback Frame Clock Synchronization
         if self.is_playing {
@@ -1612,6 +1622,17 @@ impl eframe::App for HapLabApp {
                 );
                 self.app_icon_texture = Some(ctx.load_texture("app-icon", color_img, TextureOptions::LINEAR));
             }
+        }
+
+        // Subtle 1px studio window border when windowed and not maximized
+        if !is_fullscreen && !is_maximized {
+            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("window_border")));
+            painter.rect_stroke(
+                ctx.viewport_rect(),
+                0.0,
+                Stroke::new(1.0, Color32::from_rgb(38, 38, 38)),
+                egui::StrokeKind::Inside,
+            );
         }
 
         // ===================================================================
