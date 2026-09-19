@@ -520,7 +520,7 @@ impl GenericVideoPlayer {
                 let mut cmd = std::process::Command::new(&ffmpeg_bin);
                 cmd.stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped());
+                    .stderr(std::process::Stdio::null());
 
                 cmd.args(&[
                     "-nostdin", "-an", "-sn", "-v", "error",
@@ -604,7 +604,12 @@ impl GenericVideoPlayer {
             if let Ok(mut lock) = child_arc.lock() {
                 if let Some(mut c) = lock.take() {
                     let _ = c.kill();
-                    let _ = c.wait();
+                    std::thread::Builder::new()
+                        .name("ffmpeg-reaper".to_string())
+                        .spawn(move || {
+                            let _ = c.wait();
+                        })
+                        .ok();
                 }
             }
         }
@@ -1638,6 +1643,74 @@ mod tests {
         assert!((fps - 25.0).abs() < 0.001);
         assert_eq!(frames, 50);
         assert!((dur - 2.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_generic_player_play_and_pause() {
+        let ffmpeg_bin = find_ffmpeg_binary();
+        let temp_dir = std::env::temp_dir().join("haplab_test_player_pause");
+        let _ = fs::create_dir_all(&temp_dir);
+        let mp4_path = temp_dir.join("pause_test.mp4");
+
+        #[cfg(windows)]
+        use std::os::windows::process::CommandExt;
+        #[cfg(windows)]
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        let mut gen_cmd = std::process::Command::new(&ffmpeg_bin);
+        gen_cmd.args(&[
+            "-nostdin",
+            "-y",
+            "-f", "lavfi",
+            "-i", "testsrc=size=64x64:rate=30",
+            "-vframes", "30",
+        ])
+        .arg(&mp4_path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        gen_cmd.creation_flags(CREATE_NO_WINDOW);
+
+        if let Ok(status) = gen_cmd.status() {
+            if !status.success() {
+                return;
+            }
+        } else {
+            return;
+        }
+
+        let probe = VideoProbeInfo {
+            codec: "H.264".to_string(),
+            width: 64,
+            height: 64,
+            fps: 30.0,
+            frame_count: 30,
+            duration_secs: 1.0,
+            thumbnail_rgba: None,
+        };
+        let mut player = GenericVideoPlayer::new(mp4_path.clone(), &probe);
+        player.start_playback(0);
+
+        // Receive at least 1 frame
+        let mut got_frame = false;
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(3) {
+            if let Ok((_idx, rgba)) = player.try_recv_frame() {
+                assert_eq!(rgba.len(), 64 * 64 * 4);
+                got_frame = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(got_frame, "Should receive at least 1 frame during playback");
+
+        // Now pause / stop playback
+        player.stop_playback();
+
+        // Ensure stop_playback completes cleanly
+        let _ = fs::remove_file(mp4_path);
+        let _ = fs::remove_dir(temp_dir);
     }
 }
 

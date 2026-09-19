@@ -639,7 +639,7 @@ impl HapLabApp {
                         let mut cmd = std::process::Command::new(&ffmpeg_bin);
                         cmd.stdin(std::process::Stdio::null())
                             .stdout(std::process::Stdio::piped())
-                            .stderr(std::process::Stdio::piped());
+                            .stderr(std::process::Stdio::null());
 
                         cmd.args(&[
                             "-nostdin", "-an", "-sn", "-v", "error",
@@ -1059,50 +1059,52 @@ impl eframe::App for HapLabApp {
                 self.toggle_fullscreen(ctx);
             }
 
-            if i.key_pressed(egui::Key::Space) {
-                if self.has_video_loaded() {
-                    self.toggle_playback(ctx);
+            if !ctx.egui_wants_keyboard_input() {
+                if i.key_pressed(egui::Key::Space) {
+                    if self.has_video_loaded() {
+                        self.toggle_playback(ctx);
+                    }
                 }
-            }
 
-            // Playback controls (when any video is loaded)
-            if self.has_video_loaded() {
-                let frame_count = self.video_total_frames();
-                if frame_count > 0 {
-                    if i.key_pressed(egui::Key::ArrowLeft) {
-                        let step = if i.modifiers.shift { 10 } else { 1 };
-                        let target = self.current_frame.saturating_sub(step);
-                        self.seek_to_frame(target, ctx);
-                    }
-                    if i.key_pressed(egui::Key::ArrowRight) {
-                        let step = if i.modifiers.shift { 10 } else { 1 };
-                        let target = (self.current_frame + step).min(frame_count.saturating_sub(1));
-                        self.seek_to_frame(target, ctx);
-                    }
-                    if i.key_pressed(egui::Key::Home) {
-                        self.seek_to_frame(0, ctx);
-                    }
-                    if i.key_pressed(egui::Key::End) {
-                        self.seek_to_frame(frame_count.saturating_sub(1), ctx);
-                    }
-                    if i.key_pressed(egui::Key::L) {
-                        self.loop_playback = !self.loop_playback;
-                        self.notify(
-                            format!("Loop: {}", if self.loop_playback { "On" } else { "Off" }),
-                            colors::ACCENT_CYAN,
-                        );
-                    }
-                    if i.key_pressed(egui::Key::Num1) {
-                        self.channel_mode = ChannelViewMode::Rgba;
-                        self.refresh_channel_view(ctx);
-                    }
-                    if i.key_pressed(egui::Key::Num2) {
-                        self.channel_mode = ChannelViewMode::RgbOpaque;
-                        self.refresh_channel_view(ctx);
-                    }
-                    if i.key_pressed(egui::Key::Num3) {
-                        self.channel_mode = ChannelViewMode::AlphaMatte;
-                        self.refresh_channel_view(ctx);
+                // Playback controls (when any video is loaded)
+                if self.has_video_loaded() {
+                    let frame_count = self.video_total_frames();
+                    if frame_count > 0 {
+                        if i.key_pressed(egui::Key::ArrowLeft) {
+                            let step = if i.modifiers.shift { 10 } else { 1 };
+                            let target = self.current_frame.saturating_sub(step);
+                            self.seek_to_frame(target, ctx);
+                        }
+                        if i.key_pressed(egui::Key::ArrowRight) {
+                            let step = if i.modifiers.shift { 10 } else { 1 };
+                            let target = (self.current_frame + step).min(frame_count.saturating_sub(1));
+                            self.seek_to_frame(target, ctx);
+                        }
+                        if i.key_pressed(egui::Key::Home) {
+                            self.seek_to_frame(0, ctx);
+                        }
+                        if i.key_pressed(egui::Key::End) {
+                            self.seek_to_frame(frame_count.saturating_sub(1), ctx);
+                        }
+                        if i.key_pressed(egui::Key::L) {
+                            self.loop_playback = !self.loop_playback;
+                            self.notify(
+                                format!("Loop: {}", if self.loop_playback { "On" } else { "Off" }),
+                                colors::ACCENT_CYAN,
+                            );
+                        }
+                        if i.key_pressed(egui::Key::Num1) {
+                            self.channel_mode = ChannelViewMode::Rgba;
+                            self.refresh_channel_view(ctx);
+                        }
+                        if i.key_pressed(egui::Key::Num2) {
+                            self.channel_mode = ChannelViewMode::RgbOpaque;
+                            self.refresh_channel_view(ctx);
+                        }
+                        if i.key_pressed(egui::Key::Num3) {
+                            self.channel_mode = ChannelViewMode::AlphaMatte;
+                            self.refresh_channel_view(ctx);
+                        }
                     }
                 }
             }
@@ -1795,7 +1797,9 @@ impl eframe::App for HapLabApp {
 
                 if self.is_loading_media {
                     let center = ui.max_rect().center();
-                    let loading_rect = Rect::from_center_size(center, Vec2::new(260.0, 52.0));
+                    let max_width = (ui.max_rect().width() - 40.0).max(120.0);
+                    let box_width = 420.0_f32.min(max_width);
+                    let loading_rect = Rect::from_center_size(center, Vec2::new(box_width, 54.0));
                     ui.painter().rect_filled(
                         loading_rect,
                         CornerRadius::same(10),
@@ -1807,18 +1811,34 @@ impl eframe::App for HapLabApp {
                         Stroke::new(1.0, colors::BORDER_SUBTLE),
                         egui::StrokeKind::Inside,
                     );
+                    let hover_resp = ui.interact(loading_rect, ui.id().with("loading_overlay"), egui::Sense::hover());
+                    if !self.loading_filename.is_empty() {
+                        hover_resp.on_hover_text(&self.loading_filename);
+                    }
+
+                    let inner_rect = loading_rect.shrink2(Vec2::new(14.0, 10.0));
                     let mut loading_ui = ui.new_child(
                         egui::UiBuilder::new()
-                            .max_rect(loading_rect.shrink(10.0))
+                            .max_rect(inner_rect)
                             .layout(egui::Layout::left_to_right(egui::Align::Center)),
                     );
+                    loading_ui.set_clip_rect(inner_rect);
                     loading_ui.spinner();
-                    loading_ui.add_space(8.0);
-                    loading_ui.label(
-                        RichText::new(format!("Loading {}...", self.loading_filename))
-                            .size(13.0)
-                            .color(colors::TEXT_PRIMARY)
-                            .strong(),
+                    loading_ui.add_space(10.0);
+
+                    let display_name = if self.loading_filename.is_empty() {
+                        "media".to_string()
+                    } else {
+                        self.loading_filename.clone()
+                    };
+                    loading_ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("Loading {}...", display_name))
+                                .size(13.0)
+                                .color(colors::TEXT_PRIMARY)
+                                .strong(),
+                        )
+                        .truncate(),
                     );
                 }
             });
@@ -3598,5 +3618,72 @@ impl HapLabApp {
                 });
             });
         self.show_about_window = open;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::worker::VideoProbeInfo;
+
+    #[test]
+    fn test_pause_playback_and_render() {
+        let mut app = HapLabApp::default();
+        let ctx = egui::Context::default();
+
+        let probe = VideoProbeInfo {
+            codec: "H.264".to_string(),
+            width: 1920,
+            height: 1080,
+            fps: 30.0,
+            frame_count: 100,
+            duration_secs: 3.33,
+            thumbnail_rgba: None,
+        };
+        app.generic_player = Some(GenericVideoPlayer::new(PathBuf::from("test.mp4"), &probe));
+        app.is_playing = true;
+
+        // Verify toggle_playback sets is_playing to false
+        app.toggle_playback(&ctx);
+        assert!(!app.is_playing);
+
+        // Now run a full egui frame with is_playing = false
+        let output = ctx.run_ui(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let ui_ctx = ui.ctx().clone();
+                app.render_bottom_transport(ui, &ui_ctx);
+                app.render_bottom_metadata(ui);
+            });
+        });
+        let clipped_primitives = ctx.tessellate(output.shapes, 1.0);
+        assert!(!clipped_primitives.is_empty());
+
+        // Test with HAP Reader as well
+        let temp_dir = std::env::temp_dir().join("haplab_test_hap_pause");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let mov_path = temp_dir.join("test_hap.mov");
+        let rgba = vec![128u8; 64 * 64 * 4];
+
+        if crate::worker::export_image_to_hap_mov(&rgba, 64, 64, &mov_path, hap_core::HapFormat::HapY, true).is_ok() {
+            if let Ok(reader) = hap_core::QtHapReader::open(&mov_path) {
+                let mut hap_app = HapLabApp::default();
+                hap_app.reader = Some(reader);
+                hap_app.is_playing = true;
+                hap_app.toggle_playback(&ctx);
+                assert!(!hap_app.is_playing);
+
+                let output2 = ctx.run_ui(Default::default(), |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let ui_ctx = ui.ctx().clone();
+                        hap_app.render_bottom_transport(ui, &ui_ctx);
+                        hap_app.render_bottom_metadata(ui);
+                    });
+                });
+                let prim2 = ctx.tessellate(output2.shapes, 1.0);
+                assert!(!prim2.is_empty());
+            }
+        }
+        let _ = std::fs::remove_file(mov_path);
+        let _ = std::fs::remove_dir(temp_dir);
     }
 }

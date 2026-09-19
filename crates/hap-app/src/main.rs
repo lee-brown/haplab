@@ -17,6 +17,31 @@ use std::env;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
+    // Install a panic hook that logs crash details to a file for diagnostics
+    std::panic::set_hook(Box::new(|panic_info| {
+        let location = panic_info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown".to_string());
+        let payload = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Box<dyn Any>".to_string()
+        };
+        let msg = format!("HapLab Panic at [{}]: {}\n", location, payload);
+        eprintln!("{}", msg);
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("haplab_crash.log")
+        {
+            use std::io::Write;
+            let _ = writeln!(file, "{}", msg);
+        }
+    }));
+
     let args: Vec<String> = env::args().collect();
 
     // If CLI arguments were provided, execute headless CLI mode
