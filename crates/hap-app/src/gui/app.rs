@@ -2335,13 +2335,14 @@ impl HapLabApp {
     /// Renders a thin, detailed metadata strip at the bottom of the window.
     fn render_bottom_metadata(&mut self, ui: &mut egui::Ui) {
         let mut open_audit = false;
+        let mut copied_text: Option<String> = None;
 
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = Vec2::new(7.0, 0.0);
 
             if let Some((ref msg, time, color)) = self.toast {
                 if time.elapsed().as_secs_f32() < 4.0 {
-                    ui.label(RichText::new(msg).color(color).strong().size(11.5));
+                    copyable_label(ui, msg, RichText::new(msg).color(color).strong().size(11.5), Some("Notification message"), &mut copied_text);
                     ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
                 }
             }
@@ -2350,17 +2351,20 @@ impl HapLabApp {
                 // Filename
                 if let Some(ref p) = self.mov_path {
                     if let Some(name) = p.file_name() {
-                        ui.strong(RichText::new(name.to_string_lossy()).color(colors::TEXT_PRIMARY).size(11.5));
+                        let name_str = name.to_string_lossy().to_string();
+                        let tip = format!("File: {}", p.display());
+                        copyable_label(ui, &name_str, RichText::new(&name_str).color(colors::TEXT_PRIMARY).strong().size(11.5), Some(&tip), &mut copied_text);
                         ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
                     }
                 }
 
                 // Codec format
-                ui.label(RichText::new(reader.format().name()).color(colors::ACCENT_CYAN).strong().size(11.5));
+                let codec = reader.format().name().to_string();
+                copyable_label(ui, &codec, RichText::new(&codec).color(colors::ACCENT_CYAN).strong().size(11.5), Some("Codec format"), &mut copied_text);
                 ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
 
                 // Health & integrity check badge
-                if render_reader_health_badge(ui, self.stream_audit.as_ref(), reader.width(), reader.height(), reader.format().name()) {
+                if render_reader_health_badge(ui, self.stream_audit.as_ref(), reader.width(), reader.height(), reader.format().name(), &mut copied_text) {
                     open_audit = true;
                 }
                 ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
@@ -2372,30 +2376,34 @@ impl HapLabApp {
                 } else {
                     format!("{}x{} ({})", reader.width(), reader.height(), ar)
                 };
-                ui.label(RichText::new(res_text).color(colors::TEXT_PRIMARY).size(11.5));
+                copyable_label(ui, &res_text, RichText::new(&res_text).color(colors::TEXT_PRIMARY).size(11.5), Some("Resolution and aspect ratio"), &mut copied_text);
                 ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
 
                 // FPS
-                ui.label(RichText::new(format!("{:.2} FPS", reader.fps())).color(colors::TEXT_MUTED).size(11.5));
+                let fps_text = format!("{:.2} FPS", reader.fps());
+                copyable_label(ui, &fps_text, RichText::new(&fps_text).color(colors::TEXT_MUTED).size(11.5), Some("Container framerate"), &mut copied_text);
                 ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
 
                 // Frames & Duration
                 let count = reader.frame_count();
                 let tc = format_smpte_timecode(count.saturating_sub(1), reader.fps());
-                ui.label(RichText::new(format!("{} frames ({})", count, tc)).color(colors::TEXT_MUTED).size(11.5));
+                let dur_text = format!("{} frames ({})", count, tc);
+                copyable_label(ui, &dur_text, RichText::new(&dur_text).color(colors::TEXT_MUTED).size(11.5), Some("Total frames and duration"), &mut copied_text);
 
                 // Chunks
                 if let Some(ref s) = self.stream_summary {
                     if s.chunk_count > 1 {
                         ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
-                        ui.label(RichText::new(format!("{} Chunks", s.chunk_count)).color(colors::TEXT_MUTED).size(11.0));
+                        let chunks_text = format!("{} Chunks", s.chunk_count);
+                        copyable_label(ui, &chunks_text, RichText::new(&chunks_text).color(colors::TEXT_MUTED).size(11.0), Some("Multithreaded decode chunk count"), &mut copied_text);
                     }
                 }
 
                 // Bitrate & packet
                 if let Some(ref s) = self.stream_summary {
                     ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
-                    ui.label(RichText::new(format!("{:.1} Mbps | {}", s.avg_bitrate_mbps, format_bytes(self.last_packet_bytes as u64))).color(colors::TEXT_MUTED).size(11.0));
+                    let bit_text = format!("{:.1} Mbps | {}", s.avg_bitrate_mbps, format_bytes(self.last_packet_bytes as u64));
+                    copyable_label(ui, &bit_text, RichText::new(&bit_text).color(colors::TEXT_MUTED).size(11.0), Some("Average bitrate and last packet size"), &mut copied_text);
                 }
 
                 // Decode time (goes red if slower than required frame budget)
@@ -2406,29 +2414,44 @@ impl HapLabApp {
                     colors::ACCENT_GREEN
                 };
                 ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
-                ui.label(RichText::new(format!("Decode: {:.2} ms", self.last_decode_ms)).color(decode_color).size(11.5));
+                let decode_text = format!("Decode: {:.2} ms", self.last_decode_ms);
+                let decode_tip = format!("Frame decode time: {:.2} ms (budget: {:.2} ms)", self.last_decode_ms, frame_budget_ms);
+                copyable_label(ui, &decode_text, RichText::new(&decode_text).color(decode_color).size(11.5), Some(&decode_tip), &mut copied_text);
 
-                // Right-aligned hardware status
+                // Right-aligned hardware status: lightning bolt
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if self.gpu_supports_bc {
-                        ui.label(RichText::new("Direct VRAM BC Upload").color(colors::ACCENT_GREEN).size(11.0));
+                    let (hw_title, hw_color, hw_details) = if self.gpu_supports_bc {
+                        (
+                            "Direct VRAM BC Upload",
+                            colors::ACCENT_GREEN,
+                            format!("Direct VRAM BC Upload\nGPU: {} ({})\nZero-copy compressed texture upload directly to GPU memory.", self.gpu_adapter_name, self.gpu_backend_name),
+                        )
                     } else {
-                        ui.label(RichText::new("CPU Software Fallback").color(colors::TEXT_FAINT).size(11.0));
-                    }
+                        (
+                            "CPU Software Fallback",
+                            colors::TEXT_FAINT,
+                            format!("CPU Software Fallback\nGPU: {} ({})\nBC decompression running on CPU thread pool.", self.gpu_adapter_name, self.gpu_backend_name),
+                        )
+                    };
+                    let copy_val = format!("{} (GPU: {} [{}])", hw_title, self.gpu_adapter_name, self.gpu_backend_name);
+                    copyable_lightning_badge(ui, &copy_val, hw_color, &hw_details, &mut copied_text);
                 });
             } else if let Some(ref player) = self.generic_player {
                 if let Some(ref p) = self.enc_input_path {
                     if let Some(name) = p.file_name() {
-                        ui.strong(RichText::new(name.to_string_lossy()).color(colors::TEXT_PRIMARY).size(11.5));
+                        let name_str = name.to_string_lossy().to_string();
+                        let tip = format!("File: {}", p.display());
+                        copyable_label(ui, &name_str, RichText::new(&name_str).color(colors::TEXT_PRIMARY).strong().size(11.5), Some(&tip), &mut copied_text);
                         ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
                     }
                 }
 
-                ui.label(RichText::new(player.codec.to_uppercase()).color(colors::ACCENT_CYAN).strong().size(11.5));
+                let codec = player.codec.to_uppercase();
+                copyable_label(ui, &codec, RichText::new(&codec).color(colors::ACCENT_CYAN).strong().size(11.5), Some("Codec format"), &mut copied_text);
                 ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
 
                 // Health & integrity check badge
-                if render_generic_health_badge(ui, player) {
+                if render_generic_health_badge(ui, player, &mut copied_text) {
                     open_audit = true;
                 }
                 ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
@@ -2439,32 +2462,37 @@ impl HapLabApp {
                 } else {
                     format!("{}x{} ({})", player.original_width, player.original_height, ar)
                 };
-                ui.label(RichText::new(res_text).color(colors::TEXT_PRIMARY).size(11.5));
+                copyable_label(ui, &res_text, RichText::new(&res_text).color(colors::TEXT_PRIMARY).size(11.5), Some("Resolution and aspect ratio"), &mut copied_text);
                 ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
 
-                ui.label(RichText::new(format!("{:.1} FPS", player.fps)).color(colors::TEXT_MUTED).size(11.5));
+                let fps_text = format!("{:.1} FPS", player.fps);
+                copyable_label(ui, &fps_text, RichText::new(&fps_text).color(colors::TEXT_MUTED).size(11.5), Some("Framerate"), &mut copied_text);
                 ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
 
                 let count = player.total_frames;
                 let tc = format_smpte_timecode(count.saturating_sub(1), player.fps);
-                ui.label(RichText::new(format!("{} frames ({})", count, tc)).color(colors::TEXT_MUTED).size(11.5));
-                ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+                let dur_text = format!("{} frames ({})", count, tc);
+                copyable_label(ui, &dur_text, RichText::new(&dur_text).color(colors::TEXT_MUTED).size(11.5), Some("Total frames and duration"), &mut copied_text);
 
-                ui.label(RichText::new(format!("Playback: {:.1} FPS", self.playback_fps)).color(colors::ACCENT_GREEN).size(11.5));
+                // Playback FPS removed per user request
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new("Hardware Accelerated Decoder").color(colors::ACCENT_CYAN).size(11.0));
+                    let hw_details = format!("Hardware Accelerated Decoder\nGPU: {} ({})\nActive hardware decoding pipeline.", self.gpu_adapter_name, self.gpu_backend_name);
+                    let copy_val = format!("Hardware Accelerated Decoder (GPU: {} [{}])", self.gpu_adapter_name, self.gpu_backend_name);
+                    copyable_lightning_badge(ui, &copy_val, colors::ACCENT_CYAN, &hw_details, &mut copied_text);
                 });
             } else if let Some(ref img) = self.still_image_info {
                 if let Some(name) = img.path.file_name() {
-                    ui.strong(RichText::new(name.to_string_lossy()).color(colors::TEXT_PRIMARY).size(11.5));
+                    let name_str = name.to_string_lossy().to_string();
+                    let tip = format!("File: {}", img.path.display());
+                    copyable_label(ui, &name_str, RichText::new(&name_str).color(colors::TEXT_PRIMARY).strong().size(11.5), Some(&tip), &mut copied_text);
                     ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
                 }
-                ui.label(RichText::new("Still Image").color(colors::ACCENT_CYAN).strong().size(11.5));
+                copyable_label(ui, "Still Image", RichText::new("Still Image").color(colors::ACCENT_CYAN).strong().size(11.5), Some("Media type"), &mut copied_text);
                 ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
 
                 // Health & integrity check badge
-                let _ = render_still_health_badge(ui, img.width, img.height);
+                let _ = render_still_health_badge(ui, img.width, img.height, &mut copied_text);
                 ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
 
                 let ar = format_aspect_ratio(img.width, img.height);
@@ -2473,42 +2501,59 @@ impl HapLabApp {
                 } else {
                     format!("{}x{} ({})", img.width, img.height, ar)
                 };
-                ui.label(RichText::new(res_text).color(colors::TEXT_PRIMARY).size(11.5));
+                copyable_label(ui, &res_text, RichText::new(&res_text).color(colors::TEXT_PRIMARY).size(11.5), Some("Resolution and aspect ratio"), &mut copied_text);
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new("Ready to convert or export").color(colors::TEXT_FAINT).size(11.0));
+                    let hw_details = format!("Still Image GPU Pipeline\nGPU: {} ({})\nTexture format: RGBA8 uncompressed.", self.gpu_adapter_name, self.gpu_backend_name);
+                    let copy_val = format!("Still Image (GPU: {} [{}])", self.gpu_adapter_name, self.gpu_backend_name);
+                    copyable_lightning_badge(ui, &copy_val, colors::TEXT_FAINT, &hw_details, &mut copied_text);
                 });
             } else if let Some(ref p) = self.enc_input_path {
                 if let Some(name) = p.file_name() {
-                    ui.strong(RichText::new(name.to_string_lossy()).color(colors::TEXT_PRIMARY).size(11.5));
+                    let name_str = name.to_string_lossy().to_string();
+                    let tip = format!("File: {}", p.display());
+                    copyable_label(ui, &name_str, RichText::new(&name_str).color(colors::TEXT_PRIMARY).strong().size(11.5), Some(&tip), &mut copied_text);
                     ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
                 }
                 if let Some(ref codec) = self.enc_detected_codec {
-                    ui.label(RichText::new(codec).color(colors::ACCENT_CYAN).strong().size(11.5));
+                    copyable_label(ui, codec, RichText::new(codec).color(colors::ACCENT_CYAN).strong().size(11.5), Some("Detected codec"), &mut copied_text);
                     ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
                 }
 
                 // Health & integrity check badge
-                let _ = render_sequence_health_badge(ui, self.enc_detected_frames, self.enc_detected_w, self.enc_detected_h);
+                let _ = render_sequence_health_badge(ui, self.enc_detected_frames, self.enc_detected_w, self.enc_detected_h, &mut copied_text);
                 ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
 
                 if self.enc_detected_w > 0 {
-                    ui.label(RichText::new(format!("{}x{}", self.enc_detected_w, self.enc_detected_h)).color(colors::TEXT_PRIMARY).size(11.5));
+                    let res_text = format!("{}x{}", self.enc_detected_w, self.enc_detected_h);
+                    copyable_label(ui, &res_text, RichText::new(&res_text).color(colors::TEXT_PRIMARY).size(11.5), Some("Resolution"), &mut copied_text);
                     ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
                 }
                 if self.enc_fps > 0.0 {
-                    ui.label(RichText::new(format!("{:.1} FPS", self.enc_fps)).color(colors::TEXT_MUTED).size(11.5));
+                    let fps_text = format!("{:.1} FPS", self.enc_fps);
+                    copyable_label(ui, &fps_text, RichText::new(&fps_text).color(colors::TEXT_MUTED).size(11.5), Some("Framerate"), &mut copied_text);
                 }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let hw_details = format!("Image Sequence Pipeline\nGPU: {} ({})\nActive image sequence loader.", self.gpu_adapter_name, self.gpu_backend_name);
+                    let copy_val = format!("Image Sequence (GPU: {} [{}])", self.gpu_adapter_name, self.gpu_backend_name);
+                    copyable_lightning_badge(ui, &copy_val, colors::TEXT_FAINT, &hw_details, &mut copied_text);
+                });
             } else {
-                ui.label(RichText::new("No media loaded").color(colors::TEXT_MUTED).size(11.5));
+                copyable_label(ui, "No media loaded", RichText::new("No media loaded").color(colors::TEXT_MUTED).size(11.5), Some("Media status"), &mut copied_text);
                 ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
                 ui.label(RichText::new("Drag & drop a video or image, or press Ctrl+O").color(colors::TEXT_FAINT).size(11.0));
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(format!("GPU: {} ({})", self.gpu_adapter_name, self.gpu_backend_name)).color(colors::TEXT_FAINT).size(10.5));
+                    let gpu_info = format!("GPU: {} ({})", self.gpu_adapter_name, self.gpu_backend_name);
+                    copyable_label(ui, &gpu_info, RichText::new(&gpu_info).color(colors::TEXT_FAINT).size(10.5), Some("System GPU adapter and backend"), &mut copied_text);
                 });
             }
         });
+
+        if let Some(copied) = copied_text {
+            self.notify(&format!("Copied: {}", copied), colors::ACCENT_CYAN);
+        }
 
         if open_audit {
             self.show_audit_window = true;
@@ -3792,19 +3837,79 @@ impl HapLabApp {
     }
 }
 
+fn copyable_label(
+    ui: &mut egui::Ui,
+    text: &str,
+    rich: RichText,
+    tooltip: Option<&str>,
+    copied_out: &mut Option<String>,
+) -> egui::Response {
+    let resp = ui.add(egui::Label::new(rich).sense(egui::Sense::click()));
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let resp = resp.on_hover_ui(|ui| {
+        if let Some(tip) = tooltip {
+            ui.label(RichText::new(tip).size(11.5).color(colors::TEXT_PRIMARY));
+            ui.add_space(3.0);
+        }
+        ui.label(RichText::new(format!("Click to copy: \"{}\"", text)).size(10.5).color(colors::ACCENT_CYAN));
+    });
+    if resp.clicked() {
+        ui.ctx().copy_text(text.to_string());
+        *copied_out = Some(text.to_string());
+    }
+    resp
+}
+
+fn copyable_lightning_badge(
+    ui: &mut egui::Ui,
+    copy_text: &str,
+    color: Color32,
+    tooltip: &str,
+    copied_out: &mut Option<String>,
+) -> egui::Response {
+    let resp = ui.add(
+        egui::Button::new(
+            RichText::new("⚡")
+                .color(color)
+                .size(11.5)
+                .strong(),
+        )
+        .fill(Color32::from_rgba_premultiplied(color.r() / 8, color.g() / 8, color.b() / 8, 20))
+        .stroke(Stroke::new(1.0, Color32::from_rgba_premultiplied(color.r() / 2, color.g() / 2, color.b() / 2, 80)))
+        .corner_radius(CornerRadius::same(3))
+        .min_size(Vec2::new(18.0, 18.0)),
+    );
+
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let resp = resp.on_hover_ui(|ui| {
+        ui.set_max_width(320.0);
+        ui.label(RichText::new(tooltip).size(11.5).color(colors::TEXT_PRIMARY));
+        ui.add_space(4.0);
+        ui.label(RichText::new(format!("Click to copy: \"{}\"", copy_text)).size(10.5).color(colors::ACCENT_CYAN));
+    });
+
+    if resp.clicked() {
+        ui.ctx().copy_text(copy_text.to_string());
+        *copied_out = Some(copy_text.to_string());
+    }
+
+    resp
+}
+
 fn render_health_badge_ui(
     ui: &mut egui::Ui,
     has_errors: bool,
     has_warnings: bool,
-    text: &str,
+    summary_text: &str,
     tooltip: &str,
+    copied_out: &mut Option<String>,
 ) -> bool {
     let (bg_color, stroke_color, text_color, icon) = if has_errors {
         (
             Color32::from_rgb(50, 16, 16),
             Color32::from_rgb(220, 60, 60),
             Color32::from_rgb(255, 120, 120),
-            "X",
+            "✕",
         )
     } else if has_warnings {
         (
@@ -3818,29 +3923,36 @@ fn render_health_badge_ui(
             Color32::from_rgb(16, 46, 26),
             Color32::from_rgb(50, 180, 90),
             Color32::from_rgb(90, 230, 130),
-            "OK",
+            "✓",
         )
     };
 
-    let full_label = format!("{} {}", icon, text);
     let resp = ui.add(
         egui::Button::new(
-            RichText::new(full_label)
+            RichText::new(icon)
                 .color(text_color)
-                .size(11.0)
+                .size(11.5)
                 .strong(),
         )
         .fill(bg_color)
         .stroke(Stroke::new(1.0, stroke_color))
         .corner_radius(CornerRadius::same(3))
-        .min_size(Vec2::new(0.0, 18.0)),
+        .min_size(Vec2::new(18.0, 18.0)),
     );
 
-    let clicked = resp.clicked();
-    resp.on_hover_ui(|ui| {
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let resp = resp.on_hover_ui(|ui| {
         ui.set_max_width(320.0);
         ui.label(RichText::new(tooltip).size(11.5).color(colors::TEXT_PRIMARY));
+        ui.add_space(4.0);
+        ui.label(RichText::new(format!("Click to copy: \"{}\"", summary_text)).size(10.5).color(colors::ACCENT_CYAN));
     });
+
+    let clicked = resp.clicked();
+    if clicked {
+        ui.ctx().copy_text(summary_text.to_string());
+        *copied_out = Some(summary_text.to_string());
+    }
 
     clicked
 }
@@ -3851,6 +3963,7 @@ fn render_reader_health_badge(
     width: u32,
     height: u32,
     format_name: &str,
+    copied_out: &mut Option<String>,
 ) -> bool {
     let (has_errors, has_warnings, text, tooltip) = if let Some(audit) = audit {
         if audit.has_critical_errors() {
@@ -3863,7 +3976,7 @@ fn render_reader_health_badge(
                     }
                 }
             }
-            tip.push_str("\nClick to open detailed Audit Report");
+            tip.push_str("\nClick to copy status and open Audit Report");
             (true, false, "File contains errors".to_string(), tip)
         } else if audit.has_warnings() {
             let mut tip = String::from("Stream Integrity Audit: Warnings Present\n");
@@ -3872,12 +3985,12 @@ fn render_reader_health_badge(
                     tip.push_str(&format!("* {}: {}\n", c.check_name, c.message));
                 }
             }
-            tip.push_str("\nClick to open detailed Audit Report");
+            tip.push_str("\nClick to copy status and open Audit Report");
             (false, true, "File contains warnings".to_string(), tip)
         } else {
             let frames = audit.frames_scanned;
             let tip = format!(
-                "Stream Integrity Audit: Spec Compliant\n* 4x4 block texture alignment verified\n* Standard {} format compliant\n* Scanned {} frame packets without corruption\n\nClick to view full compliance report",
+                "Stream Integrity Audit: Spec Compliant\n* 4x4 block texture alignment verified\n* Standard {} format compliant\n* Scanned {} frame packets without corruption\n\nClick to copy status and open compliance report",
                 format_name, frames
             );
             (false, false, "File contains no errors".to_string(), tip)
@@ -3887,21 +4000,21 @@ fn render_reader_health_badge(
             true,
             false,
             "File contains errors".to_string(),
-            format!("Resolution {}x{} is not divisible by 4 (4x4 GPU block violation).\nClick to view audit report.", width, height),
+            format!("Resolution {}x{} is not divisible by 4 (4x4 GPU block violation).\nClick to copy status and open audit report.", width, height),
         )
     } else {
         (
             false,
             false,
             "File contains no errors".to_string(),
-            format!("Resolution {}x{} matches 4x4 block alignment.\nClick to view audit report.", width, height),
+            format!("Resolution {}x{} matches 4x4 block alignment.\nClick to copy status and open audit report.", width, height),
         )
     };
 
-    render_health_badge_ui(ui, has_errors, has_warnings, &text, &tooltip)
+    render_health_badge_ui(ui, has_errors, has_warnings, &text, &tooltip, copied_out)
 }
 
-fn render_generic_health_badge(ui: &mut egui::Ui, player: &GenericVideoPlayer) -> bool {
+fn render_generic_health_badge(ui: &mut egui::Ui, player: &GenericVideoPlayer, copied_out: &mut Option<String>) -> bool {
     let w = player.original_width;
     let h = player.original_height;
     let (has_errors, has_warnings, text, tooltip) = if w == 0 || h == 0 || player.total_frames == 0 {
@@ -3909,72 +4022,72 @@ fn render_generic_health_badge(ui: &mut egui::Ui, player: &GenericVideoPlayer) -
             true,
             false,
             "File contains errors".to_string(),
-            "Video stream has zero dimensions or zero frame count.".to_string(),
+            "Video stream has zero dimensions or zero frame count.\nClick to copy status.".to_string(),
         )
     } else if w % 2 != 0 || h % 2 != 0 {
         (
             false,
             true,
             "File contains warnings".to_string(),
-            format!("Dimensions {}x{} have odd parity (non-standard for video codecs).", w, h),
+            format!("Dimensions {}x{} have odd parity (non-standard for video codecs).\nClick to copy status.", w, h),
         )
     } else if w % 4 != 0 || h % 4 != 0 {
         (
             false,
             false,
             "File contains no errors".to_string(),
-            format!("Valid {} video stream ({}x{}). Note: transcoding to HAP will pad to 4x4 blocks.", player.codec.to_uppercase(), w, h),
+            format!("Valid {} video stream ({}x{}). Note: transcoding to HAP will pad to 4x4 blocks.\nClick to copy status.", player.codec.to_uppercase(), w, h),
         )
     } else {
         (
             false,
             false,
             "File contains no errors".to_string(),
-            format!("Valid {} video stream ({}x{}). Container and frame decoding verified.", player.codec.to_uppercase(), w, h),
+            format!("Valid {} video stream ({}x{}). Container and frame decoding verified.\nClick to copy status.", player.codec.to_uppercase(), w, h),
         )
     };
 
-    render_health_badge_ui(ui, has_errors, has_warnings, &text, &tooltip)
+    render_health_badge_ui(ui, has_errors, has_warnings, &text, &tooltip, copied_out)
 }
 
-fn render_still_health_badge(ui: &mut egui::Ui, width: usize, height: usize) -> bool {
+fn render_still_health_badge(ui: &mut egui::Ui, width: usize, height: usize, copied_out: &mut Option<String>) -> bool {
     let (has_errors, has_warnings, text, tooltip) = if width == 0 || height == 0 {
         (
             true,
             false,
             "File contains errors".to_string(),
-            "Image has invalid zero dimensions.".to_string(),
+            "Image has invalid zero dimensions.\nClick to copy status.".to_string(),
         )
     } else {
         (
             false,
             false,
             "File contains no errors".to_string(),
-            format!("Valid {}x{} image asset decoded without errors.", width, height),
+            format!("Valid {}x{} image asset decoded without errors.\nClick to copy status.", width, height),
         )
     };
 
-    render_health_badge_ui(ui, has_errors, has_warnings, &text, &tooltip)
+    render_health_badge_ui(ui, has_errors, has_warnings, &text, &tooltip, copied_out)
 }
 
-fn render_sequence_health_badge(ui: &mut egui::Ui, frames: usize, w: u32, h: u32) -> bool {
+fn render_sequence_health_badge(ui: &mut egui::Ui, frames: usize, w: u32, h: u32, copied_out: &mut Option<String>) -> bool {
     let (has_errors, has_warnings, text, tooltip) = if frames == 0 {
         (
             true,
             false,
             "File contains errors".to_string(),
-            "Zero valid frames detected in sequence directory.".to_string(),
+            "Zero valid frames detected in sequence directory.\nClick to copy status.".to_string(),
         )
     } else {
         (
             false,
             false,
             "File contains no errors".to_string(),
-            format!("Image sequence verified: {} frames ({}x{}).", frames, w, h),
+            format!("Image sequence verified: {} frames ({}x{}).\nClick to copy status.", frames, w, h),
         )
     };
 
-    render_health_badge_ui(ui, has_errors, has_warnings, &text, &tooltip)
+    render_health_badge_ui(ui, has_errors, has_warnings, &text, &tooltip, copied_out)
 }
 
 #[cfg(test)]
@@ -4061,8 +4174,10 @@ mod tests {
 
         let _ = ctx.run_ui(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                let clicked = render_generic_health_badge(ui, &player_valid);
+                let mut copied = None;
+                let clicked = render_generic_health_badge(ui, &player_valid, &mut copied);
                 assert!(!clicked);
+                assert!(copied.is_none());
 
                 let probe_odd = VideoProbeInfo {
                     codec: "h264".to_string(),
@@ -4074,16 +4189,21 @@ mod tests {
                     thumbnail_rgba: None,
                 };
                 let player_odd = GenericVideoPlayer::new(PathBuf::from("odd.mp4"), &probe_odd);
-                let _ = render_generic_health_badge(ui, &player_odd);
+                let _ = render_generic_health_badge(ui, &player_odd, &mut copied);
 
-                let _ = render_still_health_badge(ui, 800, 600);
-                let _ = render_still_health_badge(ui, 0, 0);
+                let _ = render_still_health_badge(ui, 800, 600, &mut copied);
+                let _ = render_still_health_badge(ui, 0, 0, &mut copied);
 
-                let _ = render_sequence_health_badge(ui, 100, 1920, 1080);
-                let _ = render_sequence_health_badge(ui, 0, 0, 0);
+                let _ = render_sequence_health_badge(ui, 100, 1920, 1080, &mut copied);
+                let _ = render_sequence_health_badge(ui, 0, 0, 0, &mut copied);
 
-                let _ = render_reader_health_badge(ui, None, 1920, 1080, "HAP");
-                let _ = render_reader_health_badge(ui, None, 1921, 1081, "HAP");
+                let _ = render_reader_health_badge(ui, None, 1920, 1080, "HAP", &mut copied);
+                let _ = render_reader_health_badge(ui, None, 1921, 1081, "HAP", &mut copied);
+
+                // Test copyable_label and copyable_lightning_badge
+                let mut test_copy = None;
+                let _ = copyable_label(ui, "Test Label", RichText::new("Test Label"), None, &mut test_copy);
+                let _ = copyable_lightning_badge(ui, "Direct VRAM BC Upload", Color32::GREEN, "Tooltip", &mut test_copy);
             });
         });
 
