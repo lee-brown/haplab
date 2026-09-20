@@ -111,6 +111,17 @@ pub fn setup_studio_fonts(ctx: &egui::Context) {
             std::sync::Arc::new(egui::FontData::from_owned(data)),
         );
     }
+    if let Ok(data) = std::fs::read("C:\\Windows\\Fonts\\seguisym.ttf") {
+        fonts.font_data.insert(
+            "SegoeUISymbol".to_owned(),
+            std::sync::Arc::new(egui::FontData::from_owned(data)),
+        );
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .push("SegoeUISymbol".to_owned());
+    }
     ctx.set_fonts(fonts);
 }
 

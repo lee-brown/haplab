@@ -1492,11 +1492,6 @@ impl eframe::App for HapLabApp {
                         } else {
                             self.update_preview_frame(ctx);
                         }
-
-                        self.notify(
-                            format!("Playing {}: {} frames", fname, total_frames),
-                            colors::ACCENT_GREEN,
-                        );
                     }
                     MediaLoadResult::StillImage {
                         path,
@@ -1504,7 +1499,7 @@ impl eframe::App for HapLabApp {
                         height,
                         mut rgba,
                     } => {
-                        let fname = path
+                        let _fname = path
                             .file_name()
                             .map(|f| f.to_string_lossy().to_string())
                             .unwrap_or_default();
@@ -1526,14 +1521,9 @@ impl eframe::App for HapLabApp {
                         self.is_playing = false;
                         self.raw_frame_cache = Some(rgba.clone());
                         self.rebuild_texture_from_cache(ctx, width, height, &mut rgba);
-
-                        self.notify(
-                            format!("Loaded image: {} ({}x{}). Ready to convert or view.", fname, width, height),
-                            colors::ACCENT_CYAN,
-                        );
                     }
                     MediaLoadResult::GenericVideo { path, probe } => {
-                        let fname = path
+                        let _fname = path
                             .file_name()
                             .map(|f| f.to_string_lossy().to_string())
                             .unwrap_or_default();
@@ -1579,10 +1569,6 @@ impl eframe::App for HapLabApp {
                         self.playback_frames_count = 0;
 
                         self.update_suggested_output_filename();
-                        self.notify(
-                            format!("Playing {}: {} frames ({})", fname, probe.frame_count, probe.codec.to_uppercase()),
-                            colors::ACCENT_GREEN,
-                        );
                     }
                     MediaLoadResult::ImageSequence {
                         path,
@@ -1623,10 +1609,6 @@ impl eframe::App for HapLabApp {
                         }
 
                         self.update_suggested_output_filename();
-                        self.notify(
-                            format!("Loaded image sequence: {} frames", count),
-                            colors::ACCENT_CYAN,
-                        );
                     }
                     MediaLoadResult::Failed { path, error } => {
                         let fname = path
@@ -1976,6 +1958,39 @@ impl eframe::App for HapLabApp {
                         self.render_bottom_metadata(ui);
                     });
                 });
+        }
+
+        // ===================================================================
+        // 4.5. FLOATING TOAST NOTIFICATION OVERLAY
+        // ===================================================================
+        if let Some((ref msg, time, color)) = self.toast {
+            let elapsed = time.elapsed().as_secs_f32();
+            if elapsed < 2.5 {
+                let alpha = if elapsed > 2.0 {
+                    ((2.5 - elapsed) / 0.5 * 255.0) as u8
+                } else {
+                    245
+                };
+                let screen_rect = ctx.viewport_rect();
+                let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("floating_toast_layer")));
+                let font_id = egui::FontId::proportional(12.0);
+                let text_color = Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), alpha);
+                let galley = painter.layout_no_wrap(msg.clone(), font_id, text_color);
+                let pad = Vec2::new(14.0, 7.0);
+                let toast_size = galley.size() + pad * 2.0;
+                let bottom_offset = if is_fullscreen { 40.0 } else { 85.0 };
+                let toast_pos = egui::pos2(screen_rect.center().x - toast_size.x * 0.5, screen_rect.max.y - bottom_offset - toast_size.y);
+                let toast_rect = Rect::from_min_size(toast_pos, toast_size);
+
+                let bg = Color32::from_rgba_premultiplied(16, 16, 16, alpha);
+                let border = Color32::from_rgba_premultiplied(colors::BORDER_SUBTLE.r(), colors::BORDER_SUBTLE.g(), colors::BORDER_SUBTLE.b(), alpha);
+                painter.rect_filled(toast_rect, CornerRadius::same(6), bg);
+                painter.rect_stroke(toast_rect, CornerRadius::same(6), Stroke::new(1.0, border), egui::StrokeKind::Inside);
+                painter.galley(toast_pos + pad, galley, text_color);
+                ctx.request_repaint();
+            } else {
+                self.toast = None;
+            }
         }
 
         // ===================================================================
@@ -2340,13 +2355,6 @@ impl HapLabApp {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = Vec2::new(7.0, 0.0);
 
-            if let Some((ref msg, time, color)) = self.toast {
-                if time.elapsed().as_secs_f32() < 4.0 {
-                    copyable_label(ui, msg, RichText::new(msg).color(color).strong().size(11.5), Some("Notification message"), &mut copied_text);
-                    ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
-                }
-            }
-
             if let Some(ref reader) = self.reader {
                 // Filename
                 if let Some(ref p) = self.mov_path {
@@ -2361,12 +2369,6 @@ impl HapLabApp {
                 // Codec format
                 let codec = reader.format().name().to_string();
                 copyable_label(ui, &codec, RichText::new(&codec).color(colors::ACCENT_CYAN).strong().size(11.5), Some("Codec format"), &mut copied_text);
-                ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
-
-                // Health & integrity check badge
-                if render_reader_health_badge(ui, self.stream_audit.as_ref(), reader.width(), reader.height(), reader.format().name(), &mut copied_text) {
-                    open_audit = true;
-                }
                 ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
 
                 // Resolution & Aspect Ratio
@@ -2418,8 +2420,16 @@ impl HapLabApp {
                 let decode_tip = format!("Frame decode time: {:.2} ms (budget: {:.2} ms)", self.last_decode_ms, frame_budget_ms);
                 copyable_label(ui, &decode_text, RichText::new(&decode_text).color(decode_color).size(11.5), Some(&decode_tip), &mut copied_text);
 
-                // Right-aligned hardware status: lightning bolt
+                // Right-aligned status indicators (far right: health badge, followed by hardware status)
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Far right: Health & integrity check badge
+                    if render_reader_health_badge(ui, self.stream_audit.as_ref(), reader.width(), reader.height(), reader.format().name(), &mut copied_text) {
+                        open_audit = true;
+                    }
+
+                    ui.add_space(4.0);
+
+                    // Hardware status: lightning bolt
                     let (hw_title, hw_color, hw_details) = if self.gpu_supports_bc {
                         (
                             "Direct VRAM BC Upload",
@@ -2450,12 +2460,6 @@ impl HapLabApp {
                 copyable_label(ui, &codec, RichText::new(&codec).color(colors::ACCENT_CYAN).strong().size(11.5), Some("Codec format"), &mut copied_text);
                 ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
 
-                // Health & integrity check badge
-                if render_generic_health_badge(ui, player, &mut copied_text) {
-                    open_audit = true;
-                }
-                ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
-
                 let ar = format_aspect_ratio(player.original_width, player.original_height);
                 let res_text = if ar.is_empty() {
                     format!("{}x{}", player.original_width, player.original_height)
@@ -2474,9 +2478,15 @@ impl HapLabApp {
                 let dur_text = format!("{} frames ({})", count, tc);
                 copyable_label(ui, &dur_text, RichText::new(&dur_text).color(colors::TEXT_MUTED).size(11.5), Some("Total frames and duration"), &mut copied_text);
 
-                // Playback FPS removed per user request
-
+                // Right-aligned status indicators (far right: health badge, followed by hardware status)
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Far right: Health badge
+                    if render_generic_health_badge(ui, player, &mut copied_text) {
+                        open_audit = true;
+                    }
+
+                    ui.add_space(4.0);
+
                     let hw_details = format!("Hardware Accelerated Decoder\nGPU: {} ({})\nActive hardware decoding pipeline.", self.gpu_adapter_name, self.gpu_backend_name);
                     let copy_val = format!("Hardware Accelerated Decoder (GPU: {} [{}])", self.gpu_adapter_name, self.gpu_backend_name);
                     copyable_lightning_badge(ui, &copy_val, colors::ACCENT_CYAN, &hw_details, &mut copied_text);
@@ -2491,10 +2501,6 @@ impl HapLabApp {
                 copyable_label(ui, "Still Image", RichText::new("Still Image").color(colors::ACCENT_CYAN).strong().size(11.5), Some("Media type"), &mut copied_text);
                 ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
 
-                // Health & integrity check badge
-                let _ = render_still_health_badge(ui, img.width, img.height, &mut copied_text);
-                ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
-
                 let ar = format_aspect_ratio(img.width, img.height);
                 let res_text = if ar.is_empty() {
                     format!("{}x{}", img.width, img.height)
@@ -2503,7 +2509,13 @@ impl HapLabApp {
                 };
                 copyable_label(ui, &res_text, RichText::new(&res_text).color(colors::TEXT_PRIMARY).size(11.5), Some("Resolution and aspect ratio"), &mut copied_text);
 
+                // Right-aligned status indicators (far right: health badge, followed by hardware status)
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Far right: Health badge
+                    let _ = render_still_health_badge(ui, img.width, img.height, &mut copied_text);
+
+                    ui.add_space(4.0);
+
                     let hw_details = format!("Still Image GPU Pipeline\nGPU: {} ({})\nTexture format: RGBA8 uncompressed.", self.gpu_adapter_name, self.gpu_backend_name);
                     let copy_val = format!("Still Image (GPU: {} [{}])", self.gpu_adapter_name, self.gpu_backend_name);
                     copyable_lightning_badge(ui, &copy_val, colors::TEXT_FAINT, &hw_details, &mut copied_text);
@@ -2520,10 +2532,6 @@ impl HapLabApp {
                     ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
                 }
 
-                // Health & integrity check badge
-                let _ = render_sequence_health_badge(ui, self.enc_detected_frames, self.enc_detected_w, self.enc_detected_h, &mut copied_text);
-                ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
-
                 if self.enc_detected_w > 0 {
                     let res_text = format!("{}x{}", self.enc_detected_w, self.enc_detected_h);
                     copyable_label(ui, &res_text, RichText::new(&res_text).color(colors::TEXT_PRIMARY).size(11.5), Some("Resolution"), &mut copied_text);
@@ -2534,7 +2542,13 @@ impl HapLabApp {
                     copyable_label(ui, &fps_text, RichText::new(&fps_text).color(colors::TEXT_MUTED).size(11.5), Some("Framerate"), &mut copied_text);
                 }
 
+                // Right-aligned status indicators (far right: health badge, followed by hardware status)
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Far right: Health badge
+                    let _ = render_sequence_health_badge(ui, self.enc_detected_frames, self.enc_detected_w, self.enc_detected_h, &mut copied_text);
+
+                    ui.add_space(4.0);
+
                     let hw_details = format!("Image Sequence Pipeline\nGPU: {} ({})\nActive image sequence loader.", self.gpu_adapter_name, self.gpu_backend_name);
                     let copy_val = format!("Image Sequence (GPU: {} [{}])", self.gpu_adapter_name, self.gpu_backend_name);
                     copyable_lightning_badge(ui, &copy_val, colors::TEXT_FAINT, &hw_details, &mut copied_text);
@@ -3137,16 +3151,6 @@ impl HapLabApp {
                             }
                         }
                     });
-                }
-
-                // Toast bar at bottom of transport
-                if let Some((ref msg, time, color)) = self.toast {
-                    if time.elapsed().as_secs_f32() < 4.0 {
-                        ui.add_space(2.0);
-                        ui.label(RichText::new(msg).color(color).strong().size(12.0));
-                    } else {
-                        self.toast = None;
-                    }
                 }
 
     }
@@ -3904,41 +3908,75 @@ fn render_health_badge_ui(
     tooltip: &str,
     copied_out: &mut Option<String>,
 ) -> bool {
-    let (bg_color, stroke_color, text_color, icon) = if has_errors {
+    let (bg_color, stroke_color, icon_color, kind) = if has_errors {
         (
             Color32::from_rgb(50, 16, 16),
             Color32::from_rgb(220, 60, 60),
             Color32::from_rgb(255, 120, 120),
-            "✕",
+            2,
         )
     } else if has_warnings {
         (
             Color32::from_rgb(50, 42, 14),
             Color32::from_rgb(230, 160, 40),
             Color32::from_rgb(255, 200, 80),
-            "!",
+            1,
         )
     } else {
         (
             Color32::from_rgb(16, 46, 26),
             Color32::from_rgb(50, 180, 90),
             Color32::from_rgb(90, 230, 130),
-            "✓",
+            0,
         )
     };
 
-    let resp = ui.add(
-        egui::Button::new(
-            RichText::new(icon)
-                .color(text_color)
-                .size(11.5)
-                .strong(),
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(18.0, 18.0), egui::Sense::click());
+    let bg = if resp.hovered() {
+        Color32::from_rgb(
+            bg_color.r().saturating_add(25),
+            bg_color.g().saturating_add(25),
+            bg_color.b().saturating_add(25),
         )
-        .fill(bg_color)
-        .stroke(Stroke::new(1.0, stroke_color))
-        .corner_radius(CornerRadius::same(3))
-        .min_size(Vec2::new(18.0, 18.0)),
+    } else {
+        bg_color
+    };
+
+    ui.painter().rect(
+        rect,
+        CornerRadius::same(3),
+        bg,
+        Stroke::new(1.0, stroke_color),
+        egui::StrokeKind::Inside,
     );
+
+    let center = rect.center();
+    match kind {
+        0 => {
+            // Crisp vector checkmark: guaranteed to render without font dependencies
+            let p1 = egui::pos2(center.x - 4.2, center.y + 0.2);
+            let p2 = egui::pos2(center.x - 1.2, center.y + 3.4);
+            let p3 = egui::pos2(center.x + 4.5, center.y - 3.5);
+            ui.painter().line_segment([p1, p2], Stroke::new(1.8, icon_color));
+            ui.painter().line_segment([p2, p3], Stroke::new(1.8, icon_color));
+        }
+        1 => {
+            // Exclamation mark: vertical bar + dot
+            let p1 = egui::pos2(center.x, center.y - 4.5);
+            let p2 = egui::pos2(center.x, center.y + 0.5);
+            ui.painter().line_segment([p1, p2], Stroke::new(1.8, icon_color));
+            ui.painter().circle_filled(egui::pos2(center.x, center.y + 3.5), 1.1, icon_color);
+        }
+        _ => {
+            // Cross mark
+            let p1 = egui::pos2(center.x - 3.5, center.y - 3.5);
+            let p2 = egui::pos2(center.x + 3.5, center.y + 3.5);
+            let p3 = egui::pos2(center.x + 3.5, center.y - 3.5);
+            let p4 = egui::pos2(center.x - 3.5, center.y + 3.5);
+            ui.painter().line_segment([p1, p2], Stroke::new(1.8, icon_color));
+            ui.painter().line_segment([p3, p4], Stroke::new(1.8, icon_color));
+        }
+    }
 
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let resp = resp.on_hover_ui(|ui| {
