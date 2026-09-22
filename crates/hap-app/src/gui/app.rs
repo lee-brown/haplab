@@ -1676,17 +1676,19 @@ impl eframe::App for HapLabApp {
                 egui::Frame::new()
                     .fill(Color32::from_rgba_premultiplied(12, 12, 12, 235))
                     .stroke(Stroke::NONE)
-                    .inner_margin(egui::Margin::symmetric(14, 6))
+                    .inner_margin(egui::Margin { left: 12, right: 0, top: 0, bottom: 0 })
             } else {
                 egui::Frame::new()
                     .fill(Color32::from_rgba_premultiplied(12, 12, 12, 160))
                     .stroke(Stroke::NONE)
-                    .inner_margin(egui::Margin::symmetric(14, 7))
+                    .inner_margin(egui::Margin { left: 12, right: 0, top: 0, bottom: 0 })
             };
 
             egui::Panel::top("top_menu_panel")
                 .show_separator_line(false)
                 .frame(menu_frame)
+                .exact_size(32.0)
+                .resizable(false)
                 .show(ui, |ui: &mut egui::Ui| {
                     self.render_top_bar(ui, is_fullscreen, is_maximized);
                 });
@@ -1917,11 +1919,11 @@ impl eframe::App for HapLabApp {
                     let menu_frame = egui::Frame::new()
                         .fill(Color32::from_rgba_premultiplied(12, 12, 12, 235))
                         .stroke(Stroke::NONE)
-                        .inner_margin(egui::Margin::symmetric(14, 6));
+                        .inner_margin(egui::Margin { left: 12, right: 0, top: 0, bottom: 0 });
 
                     menu_frame.show(ui, |ui| {
-                        ui.set_min_width(screen_w - 28.0);
-                        ui.set_max_width(screen_w - 28.0);
+                        ui.set_min_width(screen_w);
+                        ui.set_max_width(screen_w);
                         self.render_top_bar(ui, true, is_maximized);
                     });
                 });
@@ -2010,36 +2012,41 @@ impl HapLabApp {
         let ctx = ui.ctx().clone();
         let has_media = self.reader.is_some() || self.enc_input_path.is_some() || self.generic_player.is_some() || self.still_image_info.is_some() || self.preview_texture.is_some();
 
-                egui::MenuBar::new().ui(ui, |ui| {
-                    // --- BRANDING ---
-                    if let Some(ref icon) = self.app_icon_texture {
-                        let (rect, _response) = ui.allocate_exact_size(Vec2::new(18.0, 18.0), egui::Sense::hover());
-                        ui.painter().image(
-                            icon.id(),
-                            rect,
-                            Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                            Color32::WHITE,
-                        );
-                        ui.add_space(3.0);
-                    }
-                    let title_resp = ui.add(
-                        egui::Label::new(RichText::new("HapLab").strong().size(14.0).color(Color32::WHITE))
-                            .sense(egui::Sense::click_and_drag()),
-                    );
-                    if title_resp.drag_started_by(egui::PointerButton::Primary) {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                    }
-                    if title_resp.double_clicked() {
-                        if is_fullscreen {
-                            self.toggle_fullscreen(&ctx);
-                        } else {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
-                        }
-                    }
-                    ui.add_space(14.0);
+        let bar_height = 32.0;
+        ui.horizontal(|ui| {
+            ui.set_height(bar_height);
 
-                    // --- MENU: FILE ---
-                    ui.menu_button("File", |ui: &mut egui::Ui| {
+            // --- BRANDING ---
+            if let Some(ref icon) = self.app_icon_texture {
+                let (rect, _response) = ui.allocate_exact_size(Vec2::new(18.0, 18.0), egui::Sense::hover());
+                ui.painter().image(
+                    icon.id(),
+                    rect,
+                    Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+                ui.add_space(3.0);
+            }
+            let title_resp = ui.add(
+                egui::Label::new(RichText::new("HapLab").strong().size(14.0).color(Color32::WHITE))
+                    .sense(egui::Sense::click_and_drag()),
+            );
+            if title_resp.drag_started_by(egui::PointerButton::Primary) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            if title_resp.double_clicked() {
+                if is_fullscreen {
+                    self.toggle_fullscreen(&ctx);
+                } else {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
+                }
+            }
+            ui.add_space(14.0);
+
+            // --- MENUS ---
+            egui::MenuBar::new().ui(ui, |ui| {
+                // --- MENU: FILE ---
+                ui.menu_button("File", |ui: &mut egui::Ui| {
                         if ui.button("Open Media File... (Ctrl+O)").clicked() {
                             if let Some(path) = rfd::FileDialog::new()
                                  .add_filter("All Media", &["mov", "mp4", "mkv", "avi", "webm", "m4v", "mxf", "ts", "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"])
@@ -2232,118 +2239,139 @@ impl HapLabApp {
                             ui.close();
                         }
                     });
+            });
 
-                    // --- RIGHT-ALIGNED STATUS, QUICK BUTTONS & WINDOW CONTROLS ---
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui: &mut egui::Ui| {
-                        // 1. CUSTOM WINDOW CONTROLS (Far Right of Title Bar)
-                        // Close button (turns crimson red on hover)
-                        let close_size = Vec2::new(36.0, 24.0);
-                        let (close_rect, close_resp) = ui.allocate_exact_size(close_size, egui::Sense::click());
-                        if close_resp.hovered() {
-                            ui.painter().rect_filled(close_rect, CornerRadius::same(3), colors::ACCENT_RED);
-                        }
-                        let close_color = if close_resp.hovered() { Color32::WHITE } else { colors::TEXT_MUTED };
-                        let c_pos = close_rect.center();
-                        ui.painter().line_segment([c_pos + Vec2::new(-4.0, -4.0), c_pos + Vec2::new(4.0, 4.0)], Stroke::new(1.3, close_color));
-                        ui.painter().line_segment([c_pos + Vec2::new(-4.0, 4.0), c_pos + Vec2::new(4.0, -4.0)], Stroke::new(1.3, close_color));
-                        let close_resp = close_resp.on_hover_text("Close (Alt+F4)");
-                        if close_resp.clicked() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
+            // --- RIGHT-ALIGNED STATUS, QUICK BUTTONS & WINDOW CONTROLS ---
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui: &mut egui::Ui| {
+                ui.spacing_mut().item_spacing = Vec2::ZERO;
 
-                        // Maximize / Restore / Exit Fullscreen button
-                        let max_size = Vec2::new(32.0, 24.0);
-                        let (max_rect, max_resp) = ui.allocate_exact_size(max_size, egui::Sense::click());
-                        if max_resp.hovered() {
-                            ui.painter().rect_filled(max_rect, CornerRadius::same(3), Color32::from_rgba_premultiplied(255, 255, 255, 22));
-                        }
-                        let max_color = if max_resp.hovered() { Color32::WHITE } else { colors::TEXT_MUTED };
-                        let m_pos = max_rect.center();
-                        if is_fullscreen || is_maximized {
-                            // Restore icon (two overlapping squares)
-                            let r1 = Rect::from_center_size(m_pos + Vec2::new(2.0, -2.0), Vec2::new(7.5, 7.5));
-                            ui.painter().rect_stroke(r1, 0.0, Stroke::new(1.1, max_color), egui::StrokeKind::Inside);
-                            let r2 = Rect::from_center_size(m_pos + Vec2::new(-2.0, 2.0), Vec2::new(7.5, 7.5));
-                            ui.painter().rect_filled(r2, 0.0, Color32::from_rgb(16, 16, 16));
-                            ui.painter().rect_stroke(r2, 0.0, Stroke::new(1.1, max_color), egui::StrokeKind::Inside);
+                // 1. CUSTOM WINDOW CONTROLS (Far Right of Title Bar)
+                // Close button (turns crimson red on hover, edge-to-edge Windows 11 style)
+                let close_size = Vec2::new(46.0, bar_height);
+                let (close_rect, close_resp) = ui.allocate_exact_size(close_size, egui::Sense::click());
+                if close_resp.is_pointer_button_down_on() {
+                    ui.painter().rect_filled(close_rect, 0.0, Color32::from_rgb(178, 36, 22));
+                } else if close_resp.hovered() {
+                    ui.painter().rect_filled(close_rect, 0.0, Color32::from_rgb(196, 43, 28));
+                }
+                let close_color = if close_resp.hovered() { Color32::WHITE } else { colors::TEXT_MUTED };
+                let c_pos = close_rect.center();
+                let arm = 5.0;
+                ui.painter().line_segment([c_pos + Vec2::new(-arm, -arm), c_pos + Vec2::new(arm, arm)], Stroke::new(1.1, close_color));
+                ui.painter().line_segment([c_pos + Vec2::new(-arm, arm), c_pos + Vec2::new(arm, -arm)], Stroke::new(1.1, close_color));
+                let close_resp = close_resp.on_hover_text("Close (Alt+F4)");
+                if close_resp.clicked() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+
+                // Maximize / Restore / Exit Fullscreen button
+                let max_size = Vec2::new(46.0, bar_height);
+                let (max_rect, max_resp) = ui.allocate_exact_size(max_size, egui::Sense::click());
+                let max_bg = if max_resp.is_pointer_button_down_on() {
+                    Color32::from_rgba_premultiplied(255, 255, 255, 12)
+                } else if max_resp.hovered() {
+                    Color32::from_rgba_premultiplied(255, 255, 255, 20)
+                } else {
+                    Color32::TRANSPARENT
+                };
+                if max_bg != Color32::TRANSPARENT {
+                    ui.painter().rect_filled(max_rect, 0.0, max_bg);
+                }
+                let max_color = if max_resp.hovered() { Color32::WHITE } else { colors::TEXT_MUTED };
+                let m_pos = max_rect.center();
+                if is_fullscreen || is_maximized {
+                    // Restore icon (two overlapping squares)
+                    let r1 = Rect::from_center_size(m_pos + Vec2::new(2.0, -2.0), Vec2::new(8.0, 8.0));
+                    ui.painter().rect_stroke(r1, 0.0, Stroke::new(1.0, max_color), egui::StrokeKind::Inside);
+                    let r2 = Rect::from_center_size(m_pos + Vec2::new(-2.0, 2.0), Vec2::new(8.0, 8.0));
+                    let bg_fill = if max_resp.hovered() { Color32::from_rgb(36, 36, 36) } else { Color32::from_rgb(16, 16, 16) };
+                    ui.painter().rect_filled(r2, 0.0, bg_fill);
+                    ui.painter().rect_stroke(r2, 0.0, Stroke::new(1.0, max_color), egui::StrokeKind::Inside);
+                } else {
+                    // Maximize icon (single square)
+                    let r = Rect::from_center_size(m_pos, Vec2::new(10.0, 10.0));
+                    ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, max_color), egui::StrokeKind::Inside);
+                }
+                let max_tooltip = if is_fullscreen {
+                    "Exit Fullscreen (Esc / F11)"
+                } else if is_maximized {
+                    "Restore Window"
+                } else {
+                    "Maximize Window"
+                };
+                let max_resp = max_resp.on_hover_text(max_tooltip);
+                if max_resp.clicked() {
+                    if is_fullscreen {
+                        self.toggle_fullscreen(&ctx);
+                    } else {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
+                    }
+                }
+
+                // Minimize button
+                let min_size = Vec2::new(46.0, bar_height);
+                let (min_rect, min_resp) = ui.allocate_exact_size(min_size, egui::Sense::click());
+                let min_bg = if min_resp.is_pointer_button_down_on() {
+                    Color32::from_rgba_premultiplied(255, 255, 255, 12)
+                } else if min_resp.hovered() {
+                    Color32::from_rgba_premultiplied(255, 255, 255, 20)
+                } else {
+                    Color32::TRANSPARENT
+                };
+                if min_bg != Color32::TRANSPARENT {
+                    ui.painter().rect_filled(min_rect, 0.0, min_bg);
+                }
+                let min_color = if min_resp.hovered() { Color32::WHITE } else { colors::TEXT_MUTED };
+                let min_pos = min_rect.center();
+                ui.painter().line_segment([min_pos + Vec2::new(-5.0, 0.0), min_pos + Vec2::new(5.0, 0.0)], Stroke::new(1.0, min_color));
+                let min_resp = min_resp.on_hover_text("Minimize Window");
+                if min_resp.clicked() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                }
+
+                ui.add_space(8.0);
+
+                let file_is_selected = has_media || self.enc_input_path.is_some();
+                let trans_btn = if file_is_selected {
+                    egui::Button::new(RichText::new("Transcode").strong().size(12.5).color(Color32::WHITE))
+                        .min_size(Vec2::new(86.0, 24.0))
+                        .fill(colors::ACCENT_BLUE)
+                        .corner_radius(CornerRadius::same(5))
+                } else {
+                    egui::Button::new(RichText::new("Transcode").strong().size(12.5).color(colors::TEXT_FAINT))
+                        .min_size(Vec2::new(86.0, 24.0))
+                        .fill(colors::BG_CARD)
+                        .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
+                        .corner_radius(CornerRadius::same(5))
+                };
+
+                let trans_resp = ui.add_enabled(file_is_selected, trans_btn);
+                let trans_resp = if file_is_selected {
+                    trans_resp.on_hover_text("Open Transcode & Ingest Panel (Ctrl+E)")
+                } else {
+                    trans_resp.on_disabled_hover_text("Open or select a media file first to enable transcoding")
+                };
+                if trans_resp.clicked() {
+                    self.show_transcode_window = !self.show_transcode_window;
+                }
+
+                // Draggable middle spacer for moving window or toggling maximize (Clean, no badges or details)
+                let remaining_space = ui.available_size();
+                if remaining_space.x > 8.0 {
+                    let (_drag_rect, drag_resp) = ui.allocate_exact_size(remaining_space, egui::Sense::click_and_drag());
+                    if drag_resp.drag_started_by(egui::PointerButton::Primary) {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    }
+                    if drag_resp.double_clicked() {
+                        if is_fullscreen {
+                            self.toggle_fullscreen(&ctx);
                         } else {
-                            // Maximize icon (single square)
-                            let r = Rect::from_center_size(m_pos, Vec2::new(9.0, 9.0));
-                            ui.painter().rect_stroke(r, 0.0, Stroke::new(1.2, max_color), egui::StrokeKind::Inside);
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
                         }
-                        let max_tooltip = if is_fullscreen {
-                            "Exit Fullscreen (Esc / F11)"
-                        } else if is_maximized {
-                            "Restore Window"
-                        } else {
-                            "Maximize Window"
-                        };
-                        let max_resp = max_resp.on_hover_text(max_tooltip);
-                        if max_resp.clicked() {
-                            if is_fullscreen {
-                                self.toggle_fullscreen(&ctx);
-                            } else {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
-                            }
-                        }
-
-                        // Minimize button
-                        let min_size = Vec2::new(32.0, 24.0);
-                        let (min_rect, min_resp) = ui.allocate_exact_size(min_size, egui::Sense::click());
-                        if min_resp.hovered() {
-                            ui.painter().rect_filled(min_rect, CornerRadius::same(3), Color32::from_rgba_premultiplied(255, 255, 255, 22));
-                        }
-                        let min_color = if min_resp.hovered() { Color32::WHITE } else { colors::TEXT_MUTED };
-                        let min_pos = min_rect.center();
-                        ui.painter().line_segment([min_pos + Vec2::new(-4.5, 3.5), min_pos + Vec2::new(4.5, 3.5)], Stroke::new(1.3, min_color));
-                        let min_resp = min_resp.on_hover_text("Minimize Window");
-                        if min_resp.clicked() {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-                        }
-
-                        ui.add_space(8.0);
-
-                        let file_is_selected = has_media || self.enc_input_path.is_some();
-                        let trans_btn = if file_is_selected {
-                            egui::Button::new(RichText::new("Transcode").strong().size(12.5).color(Color32::WHITE))
-                                .min_size(Vec2::new(86.0, 26.0))
-                                .fill(colors::ACCENT_BLUE)
-                                .corner_radius(CornerRadius::same(5))
-                        } else {
-                            egui::Button::new(RichText::new("Transcode").strong().size(12.5).color(colors::TEXT_FAINT))
-                                .min_size(Vec2::new(86.0, 26.0))
-                                .fill(colors::BG_CARD)
-                                .stroke(Stroke::new(1.0, colors::BORDER_SUBTLE))
-                                .corner_radius(CornerRadius::same(5))
-                        };
-
-                        let trans_resp = ui.add_enabled(file_is_selected, trans_btn);
-                        let trans_resp = if file_is_selected {
-                            trans_resp.on_hover_text("Open Transcode & Ingest Panel (Ctrl+E)")
-                        } else {
-                            trans_resp.on_disabled_hover_text("Open or select a media file first to enable transcoding")
-                        };
-                        if trans_resp.clicked() {
-                            self.show_transcode_window = !self.show_transcode_window;
-                        }
-
-                                                // Draggable middle spacer for moving window or toggling maximize (Clean, no badges or details)
-                        let remaining_space = ui.available_size();
-                        if remaining_space.x > 8.0 {
-                            let (_drag_rect, drag_resp) = ui.allocate_exact_size(remaining_space, egui::Sense::click_and_drag());
-                            if drag_resp.drag_started_by(egui::PointerButton::Primary) {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                            }
-                            if drag_resp.double_clicked() {
-                                if is_fullscreen {
-                                    self.toggle_fullscreen(&ctx);
-                                } else {
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_maximized));
-                                }
-                            }
-                        }
-                    });
-                });
+                    }
+                }
+            });
+        });
     }
 
 
@@ -4285,5 +4313,46 @@ mod tests {
         app.toggle_fullscreen(&ctx);
         assert!(!app.is_fullscreen);
         assert!(!app.cursor_hidden);
+    }
+
+    #[test]
+    fn test_top_bar_close_button_edge_to_edge() {
+        let mut app = HapLabApp::default();
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |ctx| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.inner_margin(egui::Margin::ZERO))
+                .show(ctx, |ui| {
+                    let menu_frame = egui::Frame::new()
+                        .fill(Color32::BLACK)
+                        .inner_margin(egui::Margin { left: 12, right: 0, top: 0, bottom: 0 });
+                    egui::Panel::top("test_top_panel")
+                        .show_separator_line(false)
+                        .frame(menu_frame)
+                        .exact_size(32.0)
+                        .resizable(false)
+                        .show(ui, |ui: &mut egui::Ui| {
+                            app.render_top_bar(ui, false, false);
+                        });
+                });
+        });
+
+        // Test in fullscreen mode
+        let _ = ctx.run_ui(Default::default(), |ctx| {
+            egui::Area::new(egui::Id::new("test_fullscreen_top_bar"))
+                .anchor(egui::Align2::LEFT_TOP, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.set_min_width(1920.0);
+                    ui.set_max_width(1920.0);
+                    let menu_frame = egui::Frame::new()
+                        .fill(Color32::BLACK)
+                        .inner_margin(egui::Margin { left: 12, right: 0, top: 0, bottom: 0 });
+                    menu_frame.show(ui, |ui| {
+                        ui.set_min_width(1920.0);
+                        ui.set_max_width(1920.0);
+                        app.render_top_bar(ui, true, false);
+                    });
+                });
+        });
     }
 }
