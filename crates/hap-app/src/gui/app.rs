@@ -3,7 +3,7 @@
 //! edge-to-edge media canvas, and non-intrusive utility windows.
 
 use super::theme::{
-    apply_studio_theme, colors, format_bytes, format_smpte_timecode,
+    apply_studio_theme, colors, format_bytes, format_frame_count, format_smpte_timecode,
     paint_ambient_glow, paint_transparency_checkerboard, render_badge, reveal_in_file_manager,
 };
 use crate::benchmark::{spawn_benchmark_worker, BenchmarkProgress, BenchmarkScore};
@@ -1083,11 +1083,18 @@ impl eframe::App for HapLabApp {
                 if i.key_pressed(egui::Key::Space) {
                     toggle_play = true;
                 }
+                let ten_sec_frames = (self.video_fps().max(1.0) * 10.0).round().max(1.0) as isize;
                 if i.key_pressed(egui::Key::ArrowLeft) {
-                    seek_delta = Some(if i.modifiers.shift { -10 } else { -1 });
+                    seek_delta = Some(if i.modifiers.shift { -1 } else { -ten_sec_frames });
                 }
                 if i.key_pressed(egui::Key::ArrowRight) {
-                    seek_delta = Some(if i.modifiers.shift { 10 } else { 1 });
+                    seek_delta = Some(if i.modifiers.shift { 1 } else { ten_sec_frames });
+                }
+                if i.key_pressed(egui::Key::Comma) {
+                    seek_delta = Some(-1);
+                }
+                if i.key_pressed(egui::Key::Period) {
+                    seek_delta = Some(1);
                 }
                 if i.key_pressed(egui::Key::Home) {
                     seek_abs = Some(0);
@@ -1676,19 +1683,17 @@ impl eframe::App for HapLabApp {
                 egui::Frame::new()
                     .fill(Color32::from_rgba_premultiplied(12, 12, 12, 235))
                     .stroke(Stroke::NONE)
-                    .inner_margin(egui::Margin { left: 12, right: 0, top: 0, bottom: 0 })
+                    .inner_margin(egui::Margin::symmetric(14, 6))
             } else {
                 egui::Frame::new()
                     .fill(Color32::from_rgba_premultiplied(12, 12, 12, 160))
                     .stroke(Stroke::NONE)
-                    .inner_margin(egui::Margin { left: 12, right: 0, top: 0, bottom: 0 })
+                    .inner_margin(egui::Margin::symmetric(14, 6))
             };
 
             egui::Panel::top("top_menu_panel")
                 .show_separator_line(false)
                 .frame(menu_frame)
-                .exact_size(32.0)
-                .resizable(false)
                 .show(ui, |ui: &mut egui::Ui| {
                     self.render_top_bar(ui, is_fullscreen, is_maximized);
                 });
@@ -1919,11 +1924,11 @@ impl eframe::App for HapLabApp {
                     let menu_frame = egui::Frame::new()
                         .fill(Color32::from_rgba_premultiplied(12, 12, 12, 235))
                         .stroke(Stroke::NONE)
-                        .inner_margin(egui::Margin { left: 12, right: 0, top: 0, bottom: 0 });
+                        .inner_margin(egui::Margin::symmetric(14, 6));
 
                     menu_frame.show(ui, |ui| {
-                        ui.set_min_width(screen_w);
-                        ui.set_max_width(screen_w);
+                        ui.set_min_width(screen_w - 28.0);
+                        ui.set_max_width(screen_w - 28.0);
                         self.render_top_bar(ui, true, is_maximized);
                     });
                 });
@@ -2012,9 +2017,7 @@ impl HapLabApp {
         let ctx = ui.ctx().clone();
         let has_media = self.reader.is_some() || self.enc_input_path.is_some() || self.generic_player.is_some() || self.still_image_info.is_some() || self.preview_texture.is_some();
 
-        let bar_height = 32.0;
         ui.horizontal(|ui| {
-            ui.set_height(bar_height);
 
             // --- BRANDING ---
             if let Some(ref icon) = self.app_icon_texture {
@@ -2122,23 +2125,26 @@ impl HapLabApp {
 
                         ui.separator();
 
-                        if ui.add_enabled(is_loaded, egui::Button::new("Step -1 Frame (Left)")).clicked() {
+                        let fps = self.video_fps().max(1.0);
+                        let ten_sec = (fps * 10.0).round().max(1.0) as usize;
+
+                        if ui.add_enabled(is_loaded, egui::Button::new("Back 10 Seconds (Left Arrow)")).clicked() {
+                            self.seek_to_frame(self.current_frame.saturating_sub(ten_sec), &ctx);
+                            ui.close();
+                        }
+
+                        if ui.add_enabled(is_loaded, egui::Button::new("Forward 10 Seconds (Right Arrow)")).clicked() {
+                            self.seek_to_frame(self.current_frame + ten_sec, &ctx);
+                            ui.close();
+                        }
+
+                        if ui.add_enabled(is_loaded, egui::Button::new("Step -1 Frame (Shift+Left, Comma)")).clicked() {
                             self.seek_to_frame(self.current_frame.saturating_sub(1), &ctx);
                             ui.close();
                         }
 
-                        if ui.add_enabled(is_loaded, egui::Button::new("Step +1 Frame (Right)")).clicked() {
+                        if ui.add_enabled(is_loaded, egui::Button::new("Step +1 Frame (Shift+Right, Period)")).clicked() {
                             self.seek_to_frame(self.current_frame + 1, &ctx);
-                            ui.close();
-                        }
-
-                        if ui.add_enabled(is_loaded, egui::Button::new("Step -10 Frames (Shift+Left)")).clicked() {
-                            self.seek_to_frame(self.current_frame.saturating_sub(10), &ctx);
-                            ui.close();
-                        }
-
-                        if ui.add_enabled(is_loaded, egui::Button::new("Step +10 Frames (Shift+Right)")).clicked() {
-                            self.seek_to_frame(self.current_frame + 10, &ctx);
                             ui.close();
                         }
 
@@ -2242,55 +2248,46 @@ impl HapLabApp {
             });
 
             // --- RIGHT-ALIGNED STATUS, QUICK BUTTONS & WINDOW CONTROLS ---
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui: &mut egui::Ui| {
-                ui.spacing_mut().item_spacing = Vec2::ZERO;
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui: &mut egui::Ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(3.0, 0.0);
 
                 // 1. CUSTOM WINDOW CONTROLS (Far Right of Title Bar)
-                // Close button (turns crimson red on hover, edge-to-edge Windows 11 style)
-                let close_size = Vec2::new(46.0, bar_height);
+                // Close button (turns crimson red on hover)
+                let close_size = Vec2::new(36.0, 24.0);
                 let (close_rect, close_resp) = ui.allocate_exact_size(close_size, egui::Sense::click());
-                if close_resp.is_pointer_button_down_on() {
-                    ui.painter().rect_filled(close_rect, 0.0, Color32::from_rgb(178, 36, 22));
-                } else if close_resp.hovered() {
-                    ui.painter().rect_filled(close_rect, 0.0, Color32::from_rgb(196, 43, 28));
+                if close_resp.hovered() {
+                    ui.painter().rect_filled(close_rect, CornerRadius::same(4), colors::ACCENT_RED);
                 }
                 let close_color = if close_resp.hovered() { Color32::WHITE } else { colors::TEXT_MUTED };
                 let c_pos = close_rect.center();
-                let arm = 5.0;
-                ui.painter().line_segment([c_pos + Vec2::new(-arm, -arm), c_pos + Vec2::new(arm, arm)], Stroke::new(1.1, close_color));
-                ui.painter().line_segment([c_pos + Vec2::new(-arm, arm), c_pos + Vec2::new(arm, -arm)], Stroke::new(1.1, close_color));
+                let arm = 4.5;
+                ui.painter().line_segment([c_pos + Vec2::new(-arm, -arm), c_pos + Vec2::new(arm, arm)], Stroke::new(1.2, close_color));
+                ui.painter().line_segment([c_pos + Vec2::new(-arm, arm), c_pos + Vec2::new(arm, -arm)], Stroke::new(1.2, close_color));
                 let close_resp = close_resp.on_hover_text("Close (Alt+F4)");
                 if close_resp.clicked() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
 
                 // Maximize / Restore / Exit Fullscreen button
-                let max_size = Vec2::new(46.0, bar_height);
+                let max_size = Vec2::new(32.0, 24.0);
                 let (max_rect, max_resp) = ui.allocate_exact_size(max_size, egui::Sense::click());
-                let max_bg = if max_resp.is_pointer_button_down_on() {
-                    Color32::from_rgba_premultiplied(255, 255, 255, 12)
-                } else if max_resp.hovered() {
-                    Color32::from_rgba_premultiplied(255, 255, 255, 20)
-                } else {
-                    Color32::TRANSPARENT
-                };
-                if max_bg != Color32::TRANSPARENT {
-                    ui.painter().rect_filled(max_rect, 0.0, max_bg);
+                if max_resp.hovered() {
+                    ui.painter().rect_filled(max_rect, CornerRadius::same(4), Color32::from_rgba_premultiplied(255, 255, 255, 22));
                 }
                 let max_color = if max_resp.hovered() { Color32::WHITE } else { colors::TEXT_MUTED };
                 let m_pos = max_rect.center();
                 if is_fullscreen || is_maximized {
                     // Restore icon (two overlapping squares)
-                    let r1 = Rect::from_center_size(m_pos + Vec2::new(2.0, -2.0), Vec2::new(8.0, 8.0));
-                    ui.painter().rect_stroke(r1, 0.0, Stroke::new(1.0, max_color), egui::StrokeKind::Inside);
-                    let r2 = Rect::from_center_size(m_pos + Vec2::new(-2.0, 2.0), Vec2::new(8.0, 8.0));
+                    let r1 = Rect::from_center_size(m_pos + Vec2::new(2.0, -2.0), Vec2::new(7.5, 7.5));
+                    ui.painter().rect_stroke(r1, 0.0, Stroke::new(1.1, max_color), egui::StrokeKind::Inside);
+                    let r2 = Rect::from_center_size(m_pos + Vec2::new(-2.0, 2.0), Vec2::new(7.5, 7.5));
                     let bg_fill = if max_resp.hovered() { Color32::from_rgb(36, 36, 36) } else { Color32::from_rgb(16, 16, 16) };
                     ui.painter().rect_filled(r2, 0.0, bg_fill);
-                    ui.painter().rect_stroke(r2, 0.0, Stroke::new(1.0, max_color), egui::StrokeKind::Inside);
+                    ui.painter().rect_stroke(r2, 0.0, Stroke::new(1.1, max_color), egui::StrokeKind::Inside);
                 } else {
                     // Maximize icon (single square)
-                    let r = Rect::from_center_size(m_pos, Vec2::new(10.0, 10.0));
-                    ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, max_color), egui::StrokeKind::Inside);
+                    let r = Rect::from_center_size(m_pos, Vec2::new(9.0, 9.0));
+                    ui.painter().rect_stroke(r, 0.0, Stroke::new(1.2, max_color), egui::StrokeKind::Inside);
                 }
                 let max_tooltip = if is_fullscreen {
                     "Exit Fullscreen (Esc / F11)"
@@ -2309,21 +2306,14 @@ impl HapLabApp {
                 }
 
                 // Minimize button
-                let min_size = Vec2::new(46.0, bar_height);
+                let min_size = Vec2::new(32.0, 24.0);
                 let (min_rect, min_resp) = ui.allocate_exact_size(min_size, egui::Sense::click());
-                let min_bg = if min_resp.is_pointer_button_down_on() {
-                    Color32::from_rgba_premultiplied(255, 255, 255, 12)
-                } else if min_resp.hovered() {
-                    Color32::from_rgba_premultiplied(255, 255, 255, 20)
-                } else {
-                    Color32::TRANSPARENT
-                };
-                if min_bg != Color32::TRANSPARENT {
-                    ui.painter().rect_filled(min_rect, 0.0, min_bg);
+                if min_resp.hovered() {
+                    ui.painter().rect_filled(min_rect, CornerRadius::same(4), Color32::from_rgba_premultiplied(255, 255, 255, 22));
                 }
                 let min_color = if min_resp.hovered() { Color32::WHITE } else { colors::TEXT_MUTED };
                 let min_pos = min_rect.center();
-                ui.painter().line_segment([min_pos + Vec2::new(-5.0, 0.0), min_pos + Vec2::new(5.0, 0.0)], Stroke::new(1.0, min_color));
+                ui.painter().line_segment([min_pos + Vec2::new(-4.5, 3.5), min_pos + Vec2::new(4.5, 3.5)], Stroke::new(1.3, min_color));
                 let min_resp = min_resp.on_hover_text("Minimize Window");
                 if min_resp.clicked() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
@@ -2417,8 +2407,9 @@ impl HapLabApp {
                 // Frames & Duration
                 let count = reader.frame_count();
                 let tc = format_smpte_timecode(count.saturating_sub(1), reader.fps());
-                let dur_text = format!("{} frames ({})", count, tc);
-                copyable_label(ui, &dur_text, RichText::new(&dur_text).color(colors::TEXT_MUTED).size(11.5), Some("Total frames and duration"), &mut copied_text);
+                let dur_text = format!("{} frames ({})", format_frame_count(count), tc);
+                let dur_tip = format!("Total frames: {} ({})", count, tc);
+                copyable_label(ui, &dur_text, RichText::new(&dur_text).color(colors::TEXT_MUTED).size(11.5), Some(&dur_tip), &mut copied_text);
 
                 // Chunks
                 if let Some(ref s) = self.stream_summary {
@@ -2448,31 +2439,12 @@ impl HapLabApp {
                 let decode_tip = format!("Frame decode time: {:.2} ms (budget: {:.2} ms)", self.last_decode_ms, frame_budget_ms);
                 copyable_label(ui, &decode_text, RichText::new(&decode_text).color(decode_color).size(11.5), Some(&decode_tip), &mut copied_text);
 
-                // Right-aligned status indicators (far right: health badge, followed by hardware status)
+                // Right-aligned status indicators (far right: health & integrity check badge)
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Far right: Health & integrity check badge
                     if render_reader_health_badge(ui, self.stream_audit.as_ref(), reader.width(), reader.height(), reader.format().name(), &mut copied_text) {
                         open_audit = true;
                     }
-
-                    ui.add_space(4.0);
-
-                    // Hardware status: lightning bolt
-                    let (hw_title, hw_color, hw_details) = if self.gpu_supports_bc {
-                        (
-                            "Direct VRAM BC Upload",
-                            colors::ACCENT_GREEN,
-                            format!("Direct VRAM BC Upload\nGPU: {} ({})\nZero-copy compressed texture upload directly to GPU memory.", self.gpu_adapter_name, self.gpu_backend_name),
-                        )
-                    } else {
-                        (
-                            "CPU Software Fallback",
-                            colors::TEXT_FAINT,
-                            format!("CPU Software Fallback\nGPU: {} ({})\nBC decompression running on CPU thread pool.", self.gpu_adapter_name, self.gpu_backend_name),
-                        )
-                    };
-                    let copy_val = format!("{} (GPU: {} [{}])", hw_title, self.gpu_adapter_name, self.gpu_backend_name);
-                    copyable_lightning_badge(ui, &copy_val, hw_color, &hw_details, &mut copied_text);
                 });
             } else if let Some(ref player) = self.generic_player {
                 if let Some(ref p) = self.enc_input_path {
@@ -2503,21 +2475,16 @@ impl HapLabApp {
 
                 let count = player.total_frames;
                 let tc = format_smpte_timecode(count.saturating_sub(1), player.fps);
-                let dur_text = format!("{} frames ({})", count, tc);
-                copyable_label(ui, &dur_text, RichText::new(&dur_text).color(colors::TEXT_MUTED).size(11.5), Some("Total frames and duration"), &mut copied_text);
+                let dur_text = format!("{} frames ({})", format_frame_count(count), tc);
+                let dur_tip = format!("Total frames: {} ({})", count, tc);
+                copyable_label(ui, &dur_text, RichText::new(&dur_text).color(colors::TEXT_MUTED).size(11.5), Some(&dur_tip), &mut copied_text);
 
-                // Right-aligned status indicators (far right: health badge, followed by hardware status)
+                // Right-aligned status indicators (far right: health badge)
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Far right: Health badge
                     if render_generic_health_badge(ui, player, &mut copied_text) {
                         open_audit = true;
                     }
-
-                    ui.add_space(4.0);
-
-                    let hw_details = format!("Hardware Accelerated Decoder\nGPU: {} ({})\nActive hardware decoding pipeline.", self.gpu_adapter_name, self.gpu_backend_name);
-                    let copy_val = format!("Hardware Accelerated Decoder (GPU: {} [{}])", self.gpu_adapter_name, self.gpu_backend_name);
-                    copyable_lightning_badge(ui, &copy_val, colors::ACCENT_CYAN, &hw_details, &mut copied_text);
                 });
             } else if let Some(ref img) = self.still_image_info {
                 if let Some(name) = img.path.file_name() {
@@ -2537,16 +2504,10 @@ impl HapLabApp {
                 };
                 copyable_label(ui, &res_text, RichText::new(&res_text).color(colors::TEXT_PRIMARY).size(11.5), Some("Resolution and aspect ratio"), &mut copied_text);
 
-                // Right-aligned status indicators (far right: health badge, followed by hardware status)
+                // Right-aligned status indicators (far right: health badge)
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Far right: Health badge
                     let _ = render_still_health_badge(ui, img.width, img.height, &mut copied_text);
-
-                    ui.add_space(4.0);
-
-                    let hw_details = format!("Still Image GPU Pipeline\nGPU: {} ({})\nTexture format: RGBA8 uncompressed.", self.gpu_adapter_name, self.gpu_backend_name);
-                    let copy_val = format!("Still Image (GPU: {} [{}])", self.gpu_adapter_name, self.gpu_backend_name);
-                    copyable_lightning_badge(ui, &copy_val, colors::TEXT_FAINT, &hw_details, &mut copied_text);
                 });
             } else if let Some(ref p) = self.enc_input_path {
                 if let Some(name) = p.file_name() {
@@ -2565,31 +2526,26 @@ impl HapLabApp {
                     copyable_label(ui, &res_text, RichText::new(&res_text).color(colors::TEXT_PRIMARY).size(11.5), Some("Resolution"), &mut copied_text);
                     ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
                 }
+                if self.enc_detected_frames > 0 {
+                    let frames_text = format!("{} frames", format_frame_count(self.enc_detected_frames));
+                    let frames_tip = format!("Total frames: {}", self.enc_detected_frames);
+                    copyable_label(ui, &frames_text, RichText::new(&frames_text).color(colors::TEXT_MUTED).size(11.5), Some(&frames_tip), &mut copied_text);
+                    ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
+                }
                 if self.enc_fps > 0.0 {
                     let fps_text = format!("{:.1} FPS", self.enc_fps);
                     copyable_label(ui, &fps_text, RichText::new(&fps_text).color(colors::TEXT_MUTED).size(11.5), Some("Framerate"), &mut copied_text);
                 }
 
-                // Right-aligned status indicators (far right: health badge, followed by hardware status)
+                // Right-aligned status indicators (far right: health badge)
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Far right: Health badge
                     let _ = render_sequence_health_badge(ui, self.enc_detected_frames, self.enc_detected_w, self.enc_detected_h, &mut copied_text);
-
-                    ui.add_space(4.0);
-
-                    let hw_details = format!("Image Sequence Pipeline\nGPU: {} ({})\nActive image sequence loader.", self.gpu_adapter_name, self.gpu_backend_name);
-                    let copy_val = format!("Image Sequence (GPU: {} [{}])", self.gpu_adapter_name, self.gpu_backend_name);
-                    copyable_lightning_badge(ui, &copy_val, colors::TEXT_FAINT, &hw_details, &mut copied_text);
                 });
             } else {
                 copyable_label(ui, "No media loaded", RichText::new("No media loaded").color(colors::TEXT_MUTED).size(11.5), Some("Media status"), &mut copied_text);
                 ui.label(RichText::new("|").color(colors::TEXT_FAINT).size(11.0));
                 ui.label(RichText::new("Drag & drop a video or image, or press Ctrl+O").color(colors::TEXT_FAINT).size(11.0));
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let gpu_info = format!("GPU: {} ({})", self.gpu_adapter_name, self.gpu_backend_name);
-                    copyable_label(ui, &gpu_info, RichText::new(&gpu_info).color(colors::TEXT_FAINT).size(10.5), Some("System GPU adapter and backend"), &mut copied_text);
-                });
             }
         });
 
@@ -2743,11 +2699,14 @@ impl HapLabApp {
 
                     if has_video {
                         let pct = if count > 0 { (self.current_frame as f32 / count as f32) * 100.0 } else { 0.0 };
-                        ui.monospace(format!("{}/{} frames ({:.0}%)", self.current_frame + 1, count, pct));
+                        let frame_text = format!("{}/{} frames ({:.0}%)", format_frame_count(self.current_frame + 1), format_frame_count(count), pct);
+                        let frame_tip = format!("Frame {} of {} frames ({:.1}%)", self.current_frame + 1, count, pct);
+                        ui.label(RichText::new(frame_text).monospace().size(12.0).color(colors::TEXT_MUTED))
+                            .on_hover_text(frame_tip);
                     } else if is_still_image {
                         ui.monospace("1/1 (Image)");
                     } else if count > 0 {
-                        ui.monospace(format!("0/{} frames", count));
+                        ui.monospace(format!("0/{} frames", format_frame_count(count)));
                     } else {
                         ui.monospace("0/0 (0%)");
                     }
@@ -2841,11 +2800,13 @@ impl HapLabApp {
                         let sp2 = egui::pos2(sc.x + 3.5, sc.y + 4.5);
                         ui.painter().add(egui::Shape::convex_polygon(vec![sp0, sp1, sp2], s_icon, Stroke::NONE));
 
-                        // 2. Step -10 Frames (<< standard rewind double triangle)
+                        let ten_sec_frames = (fps * 10.0).round().max(1.0) as usize;
+
+                        // 2. Step -1 Frame (<< single step backward)
                         let (r10_rect, r10_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
-                        let r10_resp = r10_resp.on_hover_text("Step -10 Frames (Shift+Left)");
+                        let r10_resp = r10_resp.on_hover_text("Step -1 Frame (Shift+Left, Comma)");
                         if r10_resp.clicked() && count > 0 {
-                            self.seek_to_frame(self.current_frame.saturating_sub(10), &ctx);
+                            self.seek_to_frame(self.current_frame.saturating_sub(1), &ctx);
                         }
                         let r10_bg = if r10_resp.hovered() && count > 0 { colors::BG_CARD_HOVER } else { colors::BG_CARD };
                         let r10_icon = if count > 0 { if r10_resp.hovered() { Color32::WHITE } else { colors::TEXT_PRIMARY } } else { colors::TEXT_FAINT };
@@ -2861,11 +2822,11 @@ impl HapLabApp {
                         let b2 = egui::pos2(r10_c.x + 5.0, r10_c.y + 4.5);
                         ui.painter().add(egui::Shape::convex_polygon(vec![b0, b1, b2], r10_icon, Stroke::NONE));
 
-                        // 3. Step -1 Frame (< single left triangle)
+                        // 3. Back 10 Seconds (< back arrow)
                         let (r1_rect, r1_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
-                        let r1_resp = r1_resp.on_hover_text("Step -1 Frame (Left)");
+                        let r1_resp = r1_resp.on_hover_text("Back 10 Seconds (Left Arrow)");
                         if r1_resp.clicked() && count > 0 {
-                            self.seek_to_frame(self.current_frame.saturating_sub(1), &ctx);
+                            self.seek_to_frame(self.current_frame.saturating_sub(ten_sec_frames), &ctx);
                         }
                         let r1_bg = if r1_resp.hovered() && count > 0 { colors::BG_CARD_HOVER } else { colors::BG_CARD };
                         let r1_icon = if count > 0 { if r1_resp.hovered() { Color32::WHITE } else { colors::TEXT_PRIMARY } } else { colors::TEXT_FAINT };
@@ -2921,11 +2882,11 @@ impl HapLabApp {
                             ));
                         }
 
-                        // 5. Step +1 Frame (> single right triangle)
+                        // 5. Forward 10 Seconds (> right arrow)
                         let (f1_rect, f1_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
-                        let f1_resp = f1_resp.on_hover_text("Step +1 Frame (Right)");
+                        let f1_resp = f1_resp.on_hover_text("Forward 10 Seconds (Right Arrow)");
                         if f1_resp.clicked() && count > 0 {
-                            self.seek_to_frame(self.current_frame + 1, &ctx);
+                            self.seek_to_frame((self.current_frame + ten_sec_frames).min(count.saturating_sub(1)), &ctx);
                         }
                         let f1_bg = if f1_resp.hovered() && count > 0 { colors::BG_CARD_HOVER } else { colors::BG_CARD };
                         let f1_icon = if count > 0 { if f1_resp.hovered() { Color32::WHITE } else { colors::TEXT_PRIMARY } } else { colors::TEXT_FAINT };
@@ -2937,11 +2898,11 @@ impl HapLabApp {
                         let d2 = egui::pos2(f1_c.x - 3.0, f1_c.y + 5.0);
                         ui.painter().add(egui::Shape::convex_polygon(vec![d0, d1, d2], f1_icon, Stroke::NONE));
 
-                        // 6. Step +10 Frames (>> standard fast-forward double triangle)
+                        // 6. Step +1 Frame (>> single step forward)
                         let (f10_rect, f10_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
-                        let f10_resp = f10_resp.on_hover_text("Step +10 Frames (Shift+Right)");
+                        let f10_resp = f10_resp.on_hover_text("Step +1 Frame (Shift+Right, Period)");
                         if f10_resp.clicked() && count > 0 {
-                            self.seek_to_frame(self.current_frame + 10, &ctx);
+                            self.seek_to_frame(self.current_frame + 1, &ctx);
                         }
                         let f10_bg = if f10_resp.hovered() && count > 0 { colors::BG_CARD_HOVER } else { colors::BG_CARD };
                         let f10_icon = if count > 0 { if f10_resp.hovered() { Color32::WHITE } else { colors::TEXT_PRIMARY } } else { colors::TEXT_FAINT };
@@ -3817,8 +3778,9 @@ impl HapLabApp {
                     };
 
                     row("Space", "Play / Pause Video");
-                    row("Left / Right", "Step -1 / +1 Frame");
-                    row("Shift + Left / Right", "Step -10 / +10 Frames");
+                    row("Left / Right", "Jump -10s / +10s (Back / Forward)");
+                    row("Shift + Left / Right", "Step -1 / +1 Frame");
+                    row(", / . (Comma / Period)", "Step -1 / +1 Frame");
                     row("Home / End", "Jump to First / Last Frame");
                     row("L", "Toggle Playback Looping");
                     row("1 / 2 / 3", "RGBA / RGB / Alpha Matte View");
@@ -3892,6 +3854,7 @@ fn copyable_label(
     resp
 }
 
+#[allow(dead_code)]
 fn copyable_lightning_badge(
     ui: &mut egui::Ui,
     copy_text: &str,
@@ -4316,7 +4279,7 @@ mod tests {
     }
 
     #[test]
-    fn test_top_bar_close_button_edge_to_edge() {
+    fn test_top_bar_window_controls() {
         let mut app = HapLabApp::default();
         let ctx = egui::Context::default();
         let _ = ctx.run_ui(Default::default(), |ctx| {
@@ -4325,12 +4288,10 @@ mod tests {
                 .show(ctx, |ui| {
                     let menu_frame = egui::Frame::new()
                         .fill(Color32::BLACK)
-                        .inner_margin(egui::Margin { left: 12, right: 0, top: 0, bottom: 0 });
+                        .inner_margin(egui::Margin::symmetric(14, 6));
                     egui::Panel::top("test_top_panel")
                         .show_separator_line(false)
                         .frame(menu_frame)
-                        .exact_size(32.0)
-                        .resizable(false)
                         .show(ui, |ui: &mut egui::Ui| {
                             app.render_top_bar(ui, false, false);
                         });
@@ -4346,13 +4307,28 @@ mod tests {
                     ui.set_max_width(1920.0);
                     let menu_frame = egui::Frame::new()
                         .fill(Color32::BLACK)
-                        .inner_margin(egui::Margin { left: 12, right: 0, top: 0, bottom: 0 });
+                        .inner_margin(egui::Margin::symmetric(14, 6));
                     menu_frame.show(ui, |ui| {
-                        ui.set_min_width(1920.0);
-                        ui.set_max_width(1920.0);
+                        ui.set_min_width(1892.0);
+                        ui.set_max_width(1892.0);
                         app.render_top_bar(ui, true, false);
                     });
                 });
         });
+    }
+
+    #[test]
+    fn test_seek_ten_seconds_calculation() {
+        let fps = 30.0f32;
+        let ten_sec_frames = (fps * 10.0).round().max(1.0) as usize;
+        assert_eq!(ten_sec_frames, 300);
+
+        let fps60 = 60.0f32;
+        let ten_sec_60 = (fps60 * 10.0).round().max(1.0) as usize;
+        assert_eq!(ten_sec_60, 600);
+
+        let fps24 = 23.976f32;
+        let ten_sec_24 = (fps24 * 10.0).round().max(1.0) as usize;
+        assert_eq!(ten_sec_24, 240);
     }
 }

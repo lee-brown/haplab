@@ -185,6 +185,31 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Formats a frame count into a compact string representation using metric suffixes (e.g. 1.2k, 50k, 1.5M).
+pub fn format_frame_count(count: usize) -> String {
+    if count < 1_000 {
+        format!("{}", count)
+    } else if count < 100_000 {
+        let val = count as f64 / 1_000.0;
+        let s = format!("{:.1}k", val);
+        s.replace(".0k", "k")
+    } else if count < 1_000_000 {
+        let val = ((count as f64) / 1_000.0).round() as usize;
+        format!("{}k", val)
+    } else if count < 100_000_000 {
+        let val = count as f64 / 1_000_000.0;
+        let s = format!("{:.1}M", val);
+        s.replace(".0M", "M")
+    } else if count < 1_000_000_000 {
+        let val = ((count as f64) / 1_000_000.0).round() as usize;
+        format!("{}M", val)
+    } else {
+        let val = count as f64 / 1_000_000_000.0;
+        let s = format!("{:.1}B", val);
+        s.replace(".0B", "B")
+    }
+}
+
 /// Reveals a file or directory in the native desktop file manager (Windows Explorer, Finder, etc.).
 pub fn reveal_in_file_manager(path: &Path) {
     #[cfg(target_os = "windows")]
@@ -295,4 +320,27 @@ pub fn paint_ambient_glow(painter: &Painter, rect: Rect, time: f32, is_hovered: 
     let r4 = 520.0 * total_scale;
     let a4 = ((22.0 * hover_alpha_mult).min(45.0)) as u8;
     draw_flare(Pos2::new(p4_x, p4_y), r4, Color32::from_rgba_premultiplied(140, 25, 45, a4));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_frame_count() {
+        assert_eq!(format_frame_count(0), "0");
+        assert_eq!(format_frame_count(999), "999");
+        assert_eq!(format_frame_count(1000), "1k");
+        assert_eq!(format_frame_count(1200), "1.2k");
+        assert_eq!(format_frame_count(9900), "9.9k");
+        assert_eq!(format_frame_count(10000), "10k");
+        assert_eq!(format_frame_count(12500), "12.5k");
+        assert_eq!(format_frame_count(99900), "99.9k");
+        assert_eq!(format_frame_count(100000), "100k");
+        assert_eq!(format_frame_count(250000), "250k");
+        assert_eq!(format_frame_count(1000000), "1M");
+        assert_eq!(format_frame_count(1500000), "1.5M");
+        assert_eq!(format_frame_count(100000000), "100M");
+        assert_eq!(format_frame_count(1200000000), "1.2B");
+    }
 }
